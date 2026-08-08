@@ -1,8 +1,16 @@
 name: Release
 
 on:
-  push:
-    branches: [master, main]
+  workflow_dispatch:
+    inputs:
+      versioning:
+        description: "How to decide release versions"
+        required: false
+        default: "auto"
+        type: choice
+        options:
+          - "auto"
+          - "prerelease"
 
 concurrency:
   group: release-${{ github.ref }}
