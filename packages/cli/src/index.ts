@@ -22,7 +22,7 @@ import { setGlobalProgram } from "./lib/command-registry";
 import { getToken, setVerbose } from "./lib/compat";
 import { color, getErrorMessage, setPrintMode } from "./lib/output";
 import { loadCommandPlugins } from "./lib/plugin";
-import { checkForUpdates, formatBanner } from "./lib/update-notifier";
+import { checkForUpdates, formatBanner, isOptedOut } from "./lib/update-notifier";
 import { CURRENT_VERSION } from "./lib/version";
 
 async function main() {
@@ -47,6 +47,7 @@ async function main() {
       const name = thisCommand.name();
       if (opts.updateCheck === false) return;
       if (name === "update" || thisCommand.parent?.name() === "update") return;
+      if (isOptedOut()) return;
       const latest = await checkForUpdates();
       if (latest) {
         console.log(`\n${formatBanner(CURRENT_VERSION, latest)}\n`);

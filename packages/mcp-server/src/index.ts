@@ -13,7 +13,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { getByokProvider, getConfig } from "./api";
 import { handleReadResource, handleToolCall, setAkgStorage, setToolPlugins } from "./handlers";
-import { checkForUpdates, formatBanner } from "./lib/update-notifier";
+import { checkForUpdates, formatBanner, isOptedOut } from "./lib/update-notifier";
 import { CURRENT_VERSION } from "./lib/version";
 import { loadToolPlugins } from "./plugin";
 import { RESOURCE_DEFINITIONS, buildToolList } from "./schemas";
@@ -87,6 +87,7 @@ async function initAkg(): Promise<string> {
 // banner to stderr (stdout is reserved for the MCP stdio protocol channel).
 // Never crashes the server.
 function maybePrintUpdateBanner(): void {
+  if (isOptedOut()) return;
   void checkForUpdates().then((latest) => {
     if (latest) {
       console.error(formatBanner(CURRENT_VERSION, latest));

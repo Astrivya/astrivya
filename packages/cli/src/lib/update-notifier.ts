@@ -55,7 +55,6 @@ export function isOptedOut(): boolean {
 
 export function shouldCheck(cache: UpdateCache, now = Date.now(), intervalMs = DEFAULT_INTERVAL_MS): boolean {
   if (cache.disabled) return false;
-  if (isOptedOut()) return false;
   if (!cache.lastChecked) return true;
   return now - cache.lastChecked >= intervalMs;
 }
