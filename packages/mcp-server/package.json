@@ -37,7 +37,7 @@
     "typescript": { "optional": true }
   },
   "devDependencies": {
-    "@types/node": "^20.19.43",
+    "@types/node": "^26.1.2",
     "tsup": "^8.5.1",
     "tsx": "^4.19.0",
     "typescript": "^5.0.0",

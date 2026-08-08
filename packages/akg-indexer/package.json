@@ -28,7 +28,7 @@
   },
   "peerDependenciesMeta": { "typescript": { "optional": true } },
   "devDependencies": {
-    "@types/node": "^20.19.43",
+    "@types/node": "^26.1.2",
     "tsup": "^8.5.1",
     "typescript": "^5.0.0",
     "vitest": "^4.1.8"
