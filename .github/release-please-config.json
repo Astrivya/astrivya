@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "group-pull-requests": true,
+  "packages": {
+    "packages/akg-core": { "component": "akg-core" },
+    "packages/akg-indexer": { "component": "akg-indexer" },
+    "packages/plugin-api": { "component": "plugin-api" },
+    "packages/plugin-runtime": { "component": "plugin-runtime" },
+    "packages/mcp-server": { "component": "mcp-server" },
+    "packages/cli": { "component": "cli" }
+  },
+  "linked-versions": [
+    {
+      "group-name": "astrivya",
+      "components": ["akg-core", "akg-indexer", "plugin-api", "plugin-runtime", "mcp-server", "cli"]
+    }
+  ]
+}

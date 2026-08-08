@@ -1,0 +1,39 @@
+# Smithery.ai MCP server registry config
+# https://smithery.ai/docs/config
+
+name: "@astrivya/mcp-server"
+description: "Astrivya Knowledge Graph — persistent memory for AI coding agents via MCP"
+author: "Astrivya <hello@astrivya.ai>"
+homepage: "https://github.com/astrivya/astrivya"
+license: "Apache-2.0"
+type: "stdio"
+
+command:
+  - npx
+  - -y
+  - "@astrivya/mcp-server"
+
+args: []
+
+env:
+  ASTRIVYA_WORKSPACE_PATH:
+    type: string
+    description: "Path to the workspace directory (default: current directory)"
+    required: false
+  ASTRIVYA_TOKEN:
+    type: string
+    description: "API token for cloud sync features (optional)"
+    required: false
+
+repository:
+  type: git
+  url: "https://github.com/astrivya/astrivya.git"
+
+display:
+  name: "Astrivya Knowledge Graph"
+  description: "Persistent, queryable knowledge graph for AI coding agents. Store decisions, track dependencies, and reason across your codebase."
+  icon: "🧠"
+  categories:
+    - "Knowledge Management"
+    - "Developer Tools"
+    - "Memory"

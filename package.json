@@ -1,0 +1,39 @@
+{
+  "name": "@astrivya/oss",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Astrivya Open Source — knowledge graph engine for AI coding agents",
+  "workspaces": [
+    "packages/akg-core",
+    "packages/akg-indexer",
+    "packages/mcp-server",
+    "packages/cli",
+    "packages/atlas",
+    "packages/plugin-api",
+    "packages/plugin-runtime"
+  ],
+  "scripts": {
+    "build:akg-core": "npm -w packages/akg-core run build",
+    "build:akg-indexer": "npm -w packages/akg-indexer run build",
+    "build:mcp-server": "npm -w packages/mcp-server run build",
+    "build:cli": "npm -w packages/cli run build",
+    "build:plugin-api": "npm -w packages/plugin-api run build",
+    "build:plugin-runtime": "npm -w packages/plugin-runtime run build",
+    "build:atlas": "cd packages/atlas && npm run build",
+    "build:all": "npm run build:akg-core && npm run build:akg-indexer && npm run build:plugin-api && npm run build:plugin-runtime && npm run build:mcp-server && npm run build:cli",
+    "build:all:with-atlas": "npm run build:all && npm run build:atlas",
+    "typecheck": "npm -w packages/akg-core run typecheck && npm -w packages/akg-indexer run typecheck && npm -w packages/plugin-api run typecheck && npm -w packages/plugin-runtime run typecheck && npm -w packages/mcp-server run typecheck && npm -w packages/cli run typecheck",
+    "test": "npm -w packages/akg-core run test && npm -w packages/akg-indexer run test && npm -w packages/mcp-server run test && npm -w packages/cli run test",
+    "lint": "biome check packages/",
+    "format": "biome format --write packages/",
+    "clean": "npx rimraf packages/*/dist node_modules",
+    "release:bootstrap": "bash scripts/publish-bootstrap.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4"
+  }
+}

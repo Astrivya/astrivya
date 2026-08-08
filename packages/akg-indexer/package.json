@@ -1,0 +1,46 @@
+{
+  "name": "@astrivya/akg-indexer",
+  "version": "0.1.0",
+  "description": "Astrivya Knowledge Graph indexer — parse ADRs, agent logs, todos and embed them into the AKG",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist/", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "prepublishOnly": "npm run typecheck && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@astrivya/akg-core": "^0.1.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "peerDependenciesMeta": { "typescript": { "optional": true } },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "tsup": "^8.5.1",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.8"
+  },
+  "keywords": ["knowledge-graph", "indexer", "adr", "astrivya"],
+  "license": "Apache-2.0",
+  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/astrivya/astrivya.git",
+    "directory": "packages/akg-indexer"
+  },
+  "homepage": "https://github.com/astrivya/astrivya/tree/main/packages/akg-indexer#readme",
+  "bugs": { "url": "https://github.com/astrivya/astrivya/issues" }
+}

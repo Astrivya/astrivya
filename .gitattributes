@@ -1,0 +1,25 @@
+# Auto-detect text files
+* text=auto
+
+# TypeScript
+*.ts text diff=typescript
+*.tsx text diff=typescript
+
+# JSON
+*.json text
+
+# Markdown
+*.md text
+
+# Lock files — treat as binary to avoid merge conflicts
+package-lock.json binary
+
+# Binary files
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.svg text
+
+# Generated files
+dist/** linguist-generated=true

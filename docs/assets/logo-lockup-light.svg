@@ -1,0 +1,39 @@
+﻿<svg width="186" height="48" viewBox="0 0 186 48" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Astrivya logo lockup (light)">
+  <defs>
+    <linearGradient id="lk-bg" x1="2" y1="2" x2="42" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="lk-sheen" x1="2" y1="2" x2="42" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.20"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="lk-word" x1="58" y1="0" x2="186" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#4f46e5"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(2,2) scale(0.916667)">
+    <rect x="1.5" y="1.5" width="45" height="45" rx="13.5" fill="url(#lk-bg)"/>
+    <rect x="1.5" y="1.5" width="45" height="45" rx="13.5" fill="url(#lk-sheen)"/>
+    <rect x="1.5" y="1.5" width="45" height="45" rx="13.5" stroke="#ffffff" stroke-opacity="0.16" stroke-width="1"/>
+    <g stroke="#ffffff" stroke-opacity="0.92" stroke-width="1.4" stroke-linecap="round">
+      <line x1="24" y1="13" x2="19.5" y2="24.5"/>
+      <line x1="24" y1="13" x2="28.5" y2="24.5"/>
+      <line x1="19.5" y1="24.5" x2="14.5" y2="34.5"/>
+      <line x1="28.5" y1="24.5" x2="33.5" y2="34.5"/>
+      <line x1="19.5" y1="24.5" x2="24" y2="24.5"/>
+      <line x1="24" y1="24.5" x2="28.5" y2="24.5"/>
+    </g>
+    <circle cx="24" cy="13" r="4.2" fill="#ffffff"/>
+    <circle cx="14.5" cy="34.5" r="3.1" fill="#ffffff"/>
+    <circle cx="33.5" cy="34.5" r="3.1" fill="#ffffff"/>
+    <circle cx="19.5" cy="24.5" r="2.3" fill="#ffffff" fill-opacity="0.85"/>
+    <circle cx="24" cy="24.5" r="2.3" fill="#ffffff" fill-opacity="0.85"/>
+    <circle cx="28.5" cy="24.5" r="2.3" fill="#ffffff" fill-opacity="0.85"/>
+  </g>
+
+  <text x="58" y="34" fill="url(#lk-word)" font-family="Outfit, 'Segoe UI', Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="0.5">Astrivya</text>
+</svg>

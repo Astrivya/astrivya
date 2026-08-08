@@ -1,0 +1,56 @@
+{
+  "name": "@astrivya/plugin-runtime",
+  "version": "0.1.0",
+  "description": "Astrivya Plugin Runtime — lifecycle management for plugins",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist/", "README.md"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "prepublishOnly": "npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "@astrivya/plugin-api": "^0.1.0",
+    "env-paths": "^2.2.1",
+    "tar": "7.5.22"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/tar": "^6.1.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["astrivya", "plugin-runtime"],
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/astrivya/astrivya.git",
+    "directory": "packages/plugin-runtime"
+  },
+  "homepage": "https://github.com/astrivya/astrivya/tree/main/packages/plugin-runtime#readme",
+  "bugs": {
+    "url": "https://github.com/astrivya/astrivya/issues"
+  }
+}

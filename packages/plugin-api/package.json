@@ -1,0 +1,37 @@
+{
+  "name": "@astrivya/plugin-api",
+  "version": "0.1.0",
+  "description": "Astrivya Plugin API — shared interfaces for the plugin system",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist/", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "prepublishOnly": "npm run typecheck && npm run build"
+  },
+  "peerDependencies": { "typescript": "^5.0.0" },
+  "peerDependenciesMeta": { "typescript": { "optional": true } },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["astrivya", "plugin-api"],
+  "license": "Apache-2.0",
+  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/astrivya/astrivya.git",
+    "directory": "packages/plugin-api"
+  },
+  "homepage": "https://github.com/astrivya/astrivya/tree/main/packages/plugin-api#readme",
+  "bugs": { "url": "https://github.com/astrivya/astrivya/issues" }
+}

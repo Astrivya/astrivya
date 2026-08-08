@@ -1,0 +1,11 @@
+node_modules/
+.git/
+*.md
+dist/
+packages/atlas/
+packages/cli/
+coverage/
+.env
+.env.local
+.DS_Store
+*.log

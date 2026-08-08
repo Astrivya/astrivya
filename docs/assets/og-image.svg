@@ -1,0 +1,179 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Astrivya — a local-first knowledge graph for AI coding agents. Your AI coding agent's long-term memory, inside your repo. One SQLite file, no server, no API keys.">
+  <defs>
+    <radialGradient id="bg" cx="60%" cy="48%" r="85%">
+      <stop offset="0" stop-color="#161233"/>
+      <stop offset="0.55" stop-color="#0d0a1f"/>
+      <stop offset="1" stop-color="#06040b"/>
+    </radialGradient>
+    <linearGradient id="og-word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#a5b4fc"/>
+    </linearGradient>
+    <linearGradient id="og-mark-bg" x1="2" y1="2" x2="42" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="og-mark-sheen" x1="2" y1="2" x2="42" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.20"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="glow-indigo" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#6366f1" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-violet" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#8b5cf6" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-cyan" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#06b6d4" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="node-shine" cx="0.32" cy="0.28" r="0.85">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.50"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="edge-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <filter id="node-glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <pattern id="dots" width="44" height="44" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#cbd5e1" opacity="0.30"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#dots)" opacity="0.14"/>
+
+  <!-- ambient glow -->
+  <circle cx="990" cy="320" r="360" fill="url(#glow-indigo)"/>
+  <circle cx="800" cy="430" r="200" fill="url(#glow-violet)"/>
+  <circle cx="1150" cy="150" r="150" fill="url(#glow-cyan)"/>
+
+  <!-- guide rings -->
+  <circle cx="990" cy="320" r="170" fill="none" stroke="#818cf8" stroke-opacity="0.10" stroke-width="1"/>
+  <circle cx="990" cy="320" r="225" fill="none" stroke="#818cf8" stroke-opacity="0.07" stroke-width="1" stroke-dasharray="3 9"/>
+
+  <!-- edges -->
+  <g stroke-linecap="round">
+    <line x1="990" y1="320" x2="990" y2="150"  stroke="#6366f1" stroke-opacity="0.50"/>
+    <line x1="990" y1="320" x2="1137" y2="235" stroke="#6366f1" stroke-opacity="0.50"/>
+    <line x1="990" y1="320" x2="1137" y2="405" stroke="#6366f1" stroke-opacity="0.50"/>
+    <line x1="990" y1="320" x2="990" y2="490"  stroke="#6366f1" stroke-opacity="0.50"/>
+    <line x1="990" y1="320" x2="843" y2="405"  stroke="#6366f1" stroke-opacity="0.50"/>
+    <line x1="990" y1="320" x2="843" y2="235"  stroke="#6366f1" stroke-opacity="0.50"/>
+    <line x1="990" y1="150" x2="1137" y2="235" stroke="#8b5cf6" stroke-opacity="0.45"/>
+    <line x1="1137" y1="235" x2="1137" y2="405" stroke="#06b6d4" stroke-opacity="0.45"/>
+    <line x1="1137" y1="405" x2="990" y2="490"  stroke="#6366f1" stroke-opacity="0.45"/>
+    <line x1="990" y1="490" x2="843" y2="405"  stroke="#10b981" stroke-opacity="0.40"/>
+    <line x1="843" y1="405" x2="843" y2="235"  stroke="#06b6d4" stroke-opacity="0.40"/>
+    <line x1="843" y1="235" x2="990" y2="150"  stroke="#8b5cf6" stroke-opacity="0.45"/>
+    <line x1="1207" y1="262" x2="1137" y2="235" stroke="#6366f1" stroke-opacity="0.40"/>
+    <line x1="1162" y1="465" x2="1137" y2="405" stroke="#06b6d4" stroke-opacity="0.40"/>
+    <line x1="970" y1="544" x2="990" y2="490"  stroke="#8b5cf6" stroke-opacity="0.40"/>
+    <line x1="795" y1="433" x2="843" y2="405"  stroke="#10b981" stroke-opacity="0.40"/>
+    <line x1="779" y1="243" x2="843" y2="235"  stroke="#f59e0b" stroke-opacity="0.40"/>
+    <line x1="1207" y1="262" x2="1162" y2="465" stroke="#6366f1" stroke-opacity="0.30"/>
+    <line x1="779" y1="243" x2="795" y2="433"  stroke="#6366f1" stroke-opacity="0.30"/>
+    <line x1="1137" y1="405" x2="843" y2="405"  stroke="#06b6d4" stroke-opacity="0.25"/>
+  </g>
+
+  <!-- edge glow pass -->
+  <g stroke-linecap="round" filter="url(#edge-glow)" stroke-opacity="0.45">
+    <line x1="990" y1="320" x2="990" y2="150"  stroke="#6366f1" stroke-width="3.5"/>
+    <line x1="990" y1="320" x2="990" y2="490"  stroke="#6366f1" stroke-width="3.5"/>
+    <line x1="990" y1="150" x2="1137" y2="235" stroke="#8b5cf6" stroke-width="3.5"/>
+    <line x1="1137" y1="405" x2="990" y2="490"  stroke="#6366f1" stroke-width="3.5"/>
+    <line x1="1162" y1="465" x2="1137" y2="405" stroke="#06b6d4" stroke-width="3.5"/>
+  </g>
+
+  <!-- nodes -->
+  <g>
+    <circle cx="990" cy="320" r="14" fill="#6366f1" filter="url(#node-glow)"/>
+    <circle cx="990" cy="320" r="14" fill="url(#node-shine)"/>
+    <circle cx="990" cy="320" r="14" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1" fill="none"/>
+
+    <circle cx="990" cy="150" r="10" fill="#8b5cf6"/><circle cx="990" cy="150" r="10" fill="url(#node-shine)"/><circle cx="990" cy="150" r="10" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+    <circle cx="1137" cy="235" r="10" fill="#06b6d4"/><circle cx="1137" cy="235" r="10" fill="url(#node-shine)"/><circle cx="1137" cy="235" r="10" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+    <circle cx="1137" cy="405" r="10" fill="#6366f1"/><circle cx="1137" cy="405" r="10" fill="url(#node-shine)"/><circle cx="1137" cy="405" r="10" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+    <circle cx="990" cy="490" r="10" fill="#10b981"/><circle cx="990" cy="490" r="10" fill="url(#node-shine)"/><circle cx="990" cy="490" r="10" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+    <circle cx="843" cy="405" r="9" fill="#06b6d4"/><circle cx="843" cy="405" r="9" fill="url(#node-shine)"/><circle cx="843" cy="405" r="9" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+    <circle cx="843" cy="235" r="10" fill="#6366f1"/><circle cx="843" cy="235" r="10" fill="url(#node-shine)"/><circle cx="843" cy="235" r="10" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+
+    <circle cx="1207" cy="262" r="7" fill="#6366f1"/><circle cx="1207" cy="262" r="7" fill="url(#node-shine)"/><circle cx="1207" cy="262" r="7" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+    <circle cx="1162" cy="465" r="7" fill="#06b6d4"/><circle cx="1162" cy="465" r="7" fill="url(#node-shine)"/><circle cx="1162" cy="465" r="7" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+    <circle cx="970" cy="544" r="7" fill="#8b5cf6"/><circle cx="970" cy="544" r="7" fill="url(#node-shine)"/><circle cx="970" cy="544" r="7" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+    <circle cx="795" cy="433" r="6" fill="#10b981"/><circle cx="795" cy="433" r="6" fill="url(#node-shine)"/><circle cx="795" cy="433" r="6" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+    <circle cx="779" cy="243" r="6" fill="#f59e0b"/><circle cx="779" cy="243" r="6" fill="url(#node-shine)"/><circle cx="779" cy="243" r="6" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1" fill="none"/>
+  </g>
+
+  <!-- depth particles -->
+  <circle cx="1230" cy="120" r="2" fill="#6366f1" opacity="0.6"/>
+  <circle cx="750" cy="220" r="2" fill="#06b6d4" opacity="0.5"/>
+  <circle cx="1240" cy="380" r="2" fill="#8b5cf6" opacity="0.55"/>
+  <circle cx="720" cy="180" r="2" fill="#6366f1" opacity="0.5"/>
+  <circle cx="1210" cy="520" r="2" fill="#10b981" opacity="0.45"/>
+  <circle cx="700" cy="470" r="1.5" fill="#f8fafc" opacity="0.3"/>
+  <circle cx="1180" cy="100" r="1.5" fill="#94a3b8" opacity="0.4"/>
+
+  <!-- hub pulse -->
+  <circle cx="990" cy="320" r="24" fill="none" stroke="#6366f1" stroke-opacity="0.35" stroke-width="1.5">
+    <animate attributeName="r" values="18;28;18" dur="3s" repeatCount="indefinite"/>
+    <animate attributeName="stroke-opacity" values="0.35;0.08;0.35" dur="3s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- brand row -->
+  <g transform="translate(98,66) scale(0.916667)">
+    <rect x="1.5" y="1.5" width="45" height="45" rx="13.5" fill="url(#og-mark-bg)"/>
+    <rect x="1.5" y="1.5" width="45" height="45" rx="13.5" fill="url(#og-mark-sheen)"/>
+    <rect x="1.5" y="1.5" width="45" height="45" rx="13.5" stroke="#ffffff" stroke-opacity="0.16" stroke-width="1"/>
+    <g stroke="#ffffff" stroke-opacity="0.92" stroke-width="1.4" stroke-linecap="round">
+      <line x1="24" y1="13" x2="19.5" y2="24.5"/>
+      <line x1="24" y1="13" x2="28.5" y2="24.5"/>
+      <line x1="19.5" y1="24.5" x2="14.5" y2="34.5"/>
+      <line x1="28.5" y1="24.5" x2="33.5" y2="34.5"/>
+      <line x1="19.5" y1="24.5" x2="24" y2="24.5"/>
+      <line x1="24" y1="24.5" x2="28.5" y2="24.5"/>
+    </g>
+    <circle cx="24" cy="13" r="4.2" fill="#ffffff"/>
+    <circle cx="14.5" cy="34.5" r="3.1" fill="#ffffff"/>
+    <circle cx="33.5" cy="34.5" r="3.1" fill="#ffffff"/>
+    <circle cx="19.5" cy="24.5" r="2.3" fill="#ffffff" fill-opacity="0.85"/>
+    <circle cx="24" cy="24.5" r="2.3" fill="#ffffff" fill-opacity="0.85"/>
+    <circle cx="28.5" cy="24.5" r="2.3" fill="#ffffff" fill-opacity="0.85"/>
+  </g>
+  <text x="154" y="96" fill="url(#og-word)" font-family="Outfit, 'Segoe UI', Arial, sans-serif" font-size="28" font-weight="700" letter-spacing="0.5">Astrivya</text>
+
+  <!-- top-right meta -->
+  <text x="1184" y="96" text-anchor="end" fill="#64748b" font-family="'JetBrains Mono', Consolas, monospace" font-size="12" letter-spacing="1">APACHE 2.0 · OPEN SOURCE</text>
+
+  <!-- headline -->
+  <text x="96" y="224" fill="#f8fafc" font-family="Outfit, 'Segoe UI', Arial, sans-serif" font-size="46" font-weight="600">Your AI coding agent's</text>
+  <text x="96" y="278" fill="#f8fafc" font-family="Outfit, 'Segoe UI', Arial, sans-serif" font-size="46" font-weight="600">long-term memory,</text>
+  <text x="96" y="332" fill="url(#og-word)" font-family="Outfit, 'Segoe UI', Arial, sans-serif" font-size="46" font-weight="600">inside your repo.</text>
+
+  <!-- subline -->
+  <text x="96" y="392" fill="#cbd5e1" font-family="Outfit, 'Segoe UI', Arial, sans-serif" font-size="19">A local-first knowledge graph for AI coding agents.</text>
+  <text x="96" y="422" fill="#cbd5e1" font-family="Outfit, 'Segoe UI', Arial, sans-serif" font-size="19">One SQLite file in your repo. No server. No API keys.</text>
+  <text x="96" y="452" fill="#cbd5e1" font-family="Outfit, 'Segoe UI', Arial, sans-serif" font-size="19">Works with Claude, Cursor, Codex, OpenCode &amp; any MCP client.</text>
+
+  <!-- feature chips -->
+  <rect x="96" y="490" width="204" height="36" rx="18" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1"/>
+  <text x="198" y="513" text-anchor="middle" fill="#cbd5e1" font-family="'JetBrains Mono', Consolas, monospace" font-size="13">MCP native · 14 tools</text>
+  <rect x="314" y="490" width="148" height="36" rx="18" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1"/>
+  <text x="388" y="513" text-anchor="middle" fill="#cbd5e1" font-family="'JetBrains Mono', Consolas, monospace" font-size="13">Graph reasoning</text>
+  <rect x="476" y="490" width="110" height="36" rx="18" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1"/>
+  <text x="531" y="513" text-anchor="middle" fill="#cbd5e1" font-family="'JetBrains Mono', Consolas, monospace" font-size="13">Apache 2.0</text>
+
+  <!-- install meta -->
+  <text x="96" y="576" fill="#94a3b8" font-family="'JetBrains Mono', Consolas, monospace" font-size="15">npm i @astrivya/akg-core · one file: .astrivya/akg.db</text>
+
+  <!-- footer -->
+  <line x1="96" y1="600" x2="1184" y2="600" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1"/>
+  <text x="96" y="624" fill="#64748b" font-family="'JetBrains Mono', Consolas, monospace" font-size="12">github.com/astrivya/astrivya</text>
+  <text x="1184" y="624" text-anchor="end" fill="#64748b" font-family="'JetBrains Mono', Consolas, monospace" font-size="12">astrivya.ai</text>
+</svg>
