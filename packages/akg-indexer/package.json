@@ -31,7 +31,7 @@
     "@types/node": "^20.19.43",
     "tsup": "^8.5.1",
     "typescript": "^5.0.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.10"
   },
   "keywords": ["knowledge-graph", "indexer", "adr", "astrivya"],
   "license": "Apache-2.0",

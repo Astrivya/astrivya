@@ -50,9 +50,9 @@
   "devDependencies": {
     "@types/node": "^20.19.43",
     "tsup": "^8.5.1",
-    "tsx": "^4.19.0",
+    "tsx": "^4.23.7",
     "typescript": "^5.0.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.10"
   },
   "keywords": ["cli", "knowledge-graph", "local-first", "astrivya"],
   "license": "Apache-2.0",
