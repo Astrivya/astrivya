@@ -21,7 +21,7 @@ jobs:
       paths: ${{ steps.release.outputs.paths_released }}
     steps:
       - uses: actions/checkout@v4
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           # PAT (contents:write + pull-requests:write) so release-please can
