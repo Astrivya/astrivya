@@ -1,26 +1,35 @@
-# Dependabot config — automated dependency updates
+# Dependabot config — security-only updates
+# Only automatic PRs for security advisories. Routine dependency bumps are
+# intentionally left to the team (handled manually when wanted).
 
 version: 2
 updates:
   - package-ecosystem: "npm"
     directory: "/"
+    # Security notifications still arrive regardless of schedule; this
+    # schedule only would surface non-security reminders, set inert.
     schedule:
       interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 10
-    groups:
-      production-deps:
-        dependency-type: "production"
+      day: "saturday"
+    open-pull-requests-limit: 3
+    ignore:
+      # Ignore all non-security version updates: dependabot will still open
+      # PRs for Security Advisories (these can't be matched by `ignore`).
+      - dependency-name: "*"
         update-types:
-          - "patch"
-          - "minor"
-      dev-deps:
-        dependency-type: "development"
-        update-types:
-          - "patch"
-          - "minor"
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+      day: "saturday"
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
