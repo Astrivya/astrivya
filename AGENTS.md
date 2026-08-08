@@ -50,6 +50,7 @@ original `0.1.0` uploads are superseded by `latest`).
 - **Publish auth gotcha:** use the legacy `//npm.astrivya.ai/:_auth=<base64 user:pass>` key (Basic); Verdaccio v5 rejects npm's default `_authToken` (Bearer) with 401.
 - Publish on the **VM** (creds live only in its `.env`): pack tarballs locally → scp to `/tmp` → publish with a temp `.npmrc` built from `VERDACCIO_ADMIN_USER`/`VERDACCIO_ADMIN_PASSWORD`. Never print the password.
 - All 7 packages ship `dist` (+ `LICENSE`, `README.md` via `files`) **except `cron-worker`**, which is a Cloudflare Workers source package (no `dist`/`main`; wrangler compiles from `src` at deploy time). Do **not** add a `files`/`main` to it.
+- **FSL license keys are the entitlement source** (infra `285e3a7`/`92b5ebc`): a verified `astlk_` key drives the tier used by `plugins/manifest`, `sync`, `briefings`, and `/api/ide/me` (subscriptions are fallback); `/api/ide/me` reads display fields from `profiles` (not `users`) and returns `org.tier` + `license` — the mcp-gateway depends on this to gate Cloud MCP. Do not add `full_name`/`avatar_url` selects against `users`.
 
 ## Cross-Repo Dev
 
