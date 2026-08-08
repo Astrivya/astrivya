@@ -39,14 +39,17 @@ bash scripts/dev.sh
 ## Private Registry (Verdaccio)
 
 Proprietary `@astrivya/*` packages (cloud, cloud-cli, cloud-mcp, cloud-api,
-cron-worker, infra-shared, mcp-gateway — all `0.1.0`) are published on a
-self-hosted **Verdaccio** registry at **`https://npm.astrivya.ai`** (Caddy
-route → `verdaccio:4873` on the VM; see §20 in ops-findings).
+cron-worker, infra-shared, mcp-gateway — all `0.1.1`, license `FSL-1.1-ALv2`)
+are published on a self-hosted **Verdaccio** registry at
+**`https://npm.astrivya.ai`** (Caddy route → `verdaccio:4873` on the VM; see
+§20 in ops-findings). All 7 are available on the registry as `0.1.1` (the
+original `0.1.0` uploads are superseded by `latest`).
 
 - **Guard:** every infra package carries `publishConfig: { access: "restricted", registry: "https://npm.astrivya.ai/" }`. Do **not** set `private: true` — npm refuses to publish `private` packages even to the private registry.
 - **@astrivya/* never proxies to public npm** in the verzaccio config (`proxy: none`); scope reads require auth.
 - **Publish auth gotcha:** use the legacy `//npm.astrivya.ai/:_auth=<base64 user:pass>` key (Basic); Verdaccio v5 rejects npm's default `_authToken` (Bearer) with 401.
 - Publish on the **VM** (creds live only in its `.env`): pack tarballs locally → scp to `/tmp` → publish with a temp `.npmrc` built from `VERDACCIO_ADMIN_USER`/`VERDACCIO_ADMIN_PASSWORD`. Never print the password.
+- All 7 packages ship `dist` (+ `LICENSE`, `README.md` via `files`) **except `cron-worker`**, which is a Cloudflare Workers source package (no `dist`/`main`; wrangler compiles from `src` at deploy time). Do **not** add a `files`/`main` to it.
 
 ## Cross-Repo Dev
 
