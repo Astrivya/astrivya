@@ -36,6 +36,18 @@ Start both repos together:
 bash scripts/dev.sh
 ```
 
+## Private Registry (Verdaccio)
+
+Proprietary `@astrivya/*` packages (cloud, cloud-cli, cloud-mcp, cloud-api,
+cron-worker, infra-shared, mcp-gateway — all `0.1.0`) are published on a
+self-hosted **Verdaccio** registry at **`https://npm.astrivya.ai`** (Caddy
+route → `verdaccio:4873` on the VM; see §20 in ops-findings).
+
+- **Guard:** every infra package carries `publishConfig: { access: "restricted", registry: "https://npm.astrivya.ai/" }`. Do **not** set `private: true` — npm refuses to publish `private` packages even to the private registry.
+- **@astrivya/* never proxies to public npm** in the verzaccio config (`proxy: none`); scope reads require auth.
+- **Publish auth gotcha:** use the legacy `//npm.astrivya.ai/:_auth=<base64 user:pass>` key (Basic); Verdaccio v5 rejects npm's default `_authToken` (Bearer) with 401.
+- Publish on the **VM** (creds live only in its `.env`): pack tarballs locally → scp to `/tmp` → publish with a temp `.npmrc` built from `VERDACCIO_ADMIN_USER`/`VERDACCIO_ADMIN_PASSWORD`. Never print the password.
+
 ## Cross-Repo Dev
 
 - OSS packages call cloud via HTTP, not package imports.
