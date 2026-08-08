@@ -13,6 +13,10 @@
 - [ ] `npm test`
 - [ ] `npm run build:all`
 
+## Licensing
+
+- [ ] I agree to the [Astrivya CLA](../CLA.md) (see [CONTRIBUTING.md](../CONTRIBUTING.md) "Pull Request Process")
+
 ## Release impact
 
 <!-- Which package(s) are affected? Any semver implications? -->

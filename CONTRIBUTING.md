@@ -33,6 +33,9 @@ astrivya/
 2. Add tests for your changes
 3. Run `npm run typecheck && npm run build:all && npm test`
 4. Open a PR with a clear description of what you changed and why
+5. If you haven't before, agree to the [Contributor License Agreement](CLA.md) —
+   comment on your PR with `I agree to the [Astrivya CLA] for this and all
+   future contributions.` A maintainer will label it `cla-signed`.
 
 ## Code Guidelines
 
@@ -43,4 +46,7 @@ astrivya/
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under Apache 2.0.
+By contributing you agree to the terms of the [Contributor License
+Agreement](CLA.md). The Project is released under Apache 2.0, with some
+enterprise/cloud packages additionally offered under FSL-1.1-ALv2 (see
+[`CLA.md`](CLA.md) and [`LICENSE`](LICENSE) for details).
