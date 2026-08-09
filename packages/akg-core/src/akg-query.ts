@@ -70,6 +70,21 @@ export class AkgQuery {
     return !!(await this.getEmbedder());
   }
 
+  /**
+   * Embed a bare text with the local embedder, or `[]` when unavailable.
+   * Used to turn an ad-hoc query into a vector for cloud-side vector search.
+   */
+  async embedQuery(query: string): Promise<number[]> {
+    try {
+      const emb = await this.getEmbedder();
+      if (!emb) return [];
+      const v = await emb.embed(query);
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  }
+
   async retrieve(query: string, limit = 8): Promise<RetrievalResult[]> {
     const intent = this.classifyQuery(query);
 

@@ -26,6 +26,8 @@ export {
   AkgCommunity,
   AkgEdge,
   AkgNode,
+  EMBEDDING_DIM,
+  EMBEDDING_MODEL,
   NodeType,
   QueryIntent,
   RelationType,

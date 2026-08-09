@@ -112,3 +112,12 @@ export interface RetrievalResult {
   /** True when the chunk/node is older than the staleness threshold. */
   stale?: boolean;
 }
+
+/**
+ * The embedding model + dimension used by the local ONNX embedder and shared
+ * with the cloud vector index. Local and cloud vectors are only comparable
+ * while these agree; a model upgrade bumps EMBEDDING_MODEL/EMBEDDING_DIM and
+ * re-embeds + migrates the cloud column (version-stamped per node).
+ */
+export const EMBEDDING_MODEL = "snowflake-arctic-embed-xs";
+export const EMBEDDING_DIM = 384;

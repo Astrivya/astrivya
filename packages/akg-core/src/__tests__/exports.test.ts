@@ -3,6 +3,8 @@ import {
   AkgError,
   AkgQuery,
   AkgStorage,
+  EMBEDDING_DIM,
+  EMBEDDING_MODEL,
   GraphTraversal,
   ImpactAnalyzer,
   MergeError,
@@ -62,5 +64,20 @@ describe("@astrivya/akg-core public API", () => {
     expect(mergeNode).toBeInstanceOf(Function);
     expect(mergeEdges).toBeInstanceOf(Function);
     expect(mergeChunks).toBeInstanceOf(Function);
+  });
+
+  it("exposes the shared embedding model constants", () => {
+    expect(EMBEDDING_MODEL).toBe("snowflake-arctic-embed-xs");
+    expect(EMBEDDING_DIM).toBe(384);
+  });
+
+  it("AkgQuery exposes a query embedder", () => {
+    const storage = new AkgStorage();
+    const query = new AkgQuery(storage, ".");
+    // embedQuery returns [] when the ONNX model is unavailable in CI — it
+    // must never throw.
+    expect(query.embedQuery).toBeInstanceOf(Function);
+    const result = query.embedQuery("test query");
+    expect(result).toBeInstanceOf(Promise);
   });
 });
