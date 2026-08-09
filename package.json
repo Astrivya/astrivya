@@ -35,5 +35,9 @@
   "license": "Apache-2.0",
   "devDependencies": {
     "@biomejs/biome": "1.9.4"
+  },
+  "overrides": {
+    "protobufjs": "7.6.5",
+    "sharp": "0.35.3"
   }
 }
