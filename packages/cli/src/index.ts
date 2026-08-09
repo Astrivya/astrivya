@@ -17,6 +17,7 @@ import { registerRuntime } from "./commands/runtime";
 import { registerSetup } from "./commands/setup";
 import { registerStatus } from "./commands/status";
 import { registerSync } from "./commands/sync";
+import { registerTeam } from "./commands/team";
 import { startTui } from "./commands/tui";
 import { registerUpdate } from "./commands/update";
 import { setGlobalProgram } from "./lib/command-registry";
@@ -78,6 +79,7 @@ async function main() {
   registerAuth(program);
   registerCredits(program);
   registerSync(program);
+  registerTeam(program);
   registerPlugins(program);
 
   // Discover and register cloud command plugins

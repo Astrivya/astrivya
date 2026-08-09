@@ -29,6 +29,9 @@ export interface AppConfig {
   customModelPath?: string;
   syncApiKey?: string;
   licenseKey?: string;
+  teamMcpId?: string;
+  role?: string;
+  teamName?: string;
 }
 
 let _configCache: AppConfig | null = null;

@@ -256,6 +256,34 @@ export function refreshContextDigest(): void {
   }
 }
 
+/**
+ * Compact team block for the session-start digest. Only resolves when the
+ * server runs in team mode (ASTRIVYA_TEAM_MCP / `--team <id>`): fetches the
+ * org context from the cloud and flattens it to a few prose lines. Returns
+ * undefined when not in team mode or the cloud is unreachable — the digest
+ * must never fail over a cloud call.
+ */
+async function teamDigestBlock(): Promise<Record<string, unknown> | undefined> {
+  const { syncUrl, token, teamId } = getConfig();
+  if (!syncUrl || !token || !teamId) return undefined;
+  try {
+    const cloud = await syncCall(API_PATHS.TEAM_CONTEXT, "GET");
+    const org = cloud?.org;
+    const members = (cloud?.members || []).length;
+    const decisions = (cloud?.recentDecisions || []).slice(0, 3).map((d: any) => d.title);
+    return {
+      team: {
+        mcpId: teamId,
+        name: org?.name ?? null,
+        members,
+        recent_decisions: decisions,
+      },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Local tool handlers
 // ---------------------------------------------------------------------------
@@ -329,14 +357,15 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
   get_team_context: async () => {
     const s = getStorage();
     const stats = s.getStats();
-    const { syncUrl, token } = getConfig();
+    const { syncUrl, token, teamId } = getConfig();
 
     const note = "Cloud API unavailable - using local AKG stats";
+    const team = { teamId: teamId || null };
     if (syncUrl && token) {
       try {
-        const cloud = await syncCall(API_PATHS.BRIEFING_DAILY(), "GET");
+        const cloud = await syncCall(API_PATHS.TEAM_CONTEXT, "GET");
         return envelope(
-          { workspace: workspacePath, nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks, cloud },
+          { workspace: workspacePath, nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks, team, cloud },
           { source: "cloud", note: "Synced team context from cloud", quality: "high" },
         );
       } catch {
@@ -345,7 +374,7 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
     }
 
     return envelope(
-      { workspace: workspacePath, nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks },
+      { workspace: workspacePath, nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks, team },
       { note },
     );
   },
@@ -356,7 +385,7 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
     let note = "Local mode - no team configured";
     if (syncUrl && token) {
       try {
-        const cloud = await syncCall("/api/team/members", "GET");
+        const cloud = await syncCall(API_PATHS.TEAM_MEMBERS, "GET");
         members = cloud.members || [];
         note = "Synced from cloud";
       } catch {
@@ -585,6 +614,10 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
   get_context_digest: async (args) => {
     const limit = args?.limit || 8;
     const payload = buildDigestPayload(limit);
+    if (getConfig().teamId) {
+      const team = await teamDigestBlock();
+      if (team) return envelope({ ...payload, team }, { note: "Session-start context digest (team mode)" });
+    }
     persistDigest(payload);
     return envelope(payload, {
       note: "Session-start context digest",

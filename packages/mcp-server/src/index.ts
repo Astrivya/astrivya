@@ -205,6 +205,12 @@ async function runHttpServer(port: number) {
 
 async function main() {
   const args = process.argv.slice(2);
+
+  const teamIndex = args.indexOf("--team");
+  if (teamIndex !== -1 && args[teamIndex + 1]) {
+    process.env.ASTRIVYA_TEAM_MCP = args[teamIndex + 1];
+  }
+
   const httpIndex = args.indexOf("--http") !== -1 || args.indexOf("--sse") !== -1;
   if (httpIndex) {
     const portIndex = args.indexOf("--port");

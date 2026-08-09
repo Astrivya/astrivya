@@ -10,6 +10,10 @@ function resolveToken(): string | undefined {
   return process.env.ASTRIVYA_TOKEN || process.env.ASTRIVYA_API_KEY;
 }
 
+function resolveTeamId(): string | undefined {
+  return process.env.ASTRIVYA_TEAM_MCP || process.env.ASTRIVYA_TEAM_ID;
+}
+
 export const API_PATHS = {
   DECISIONS: "/api/decisions",
   BRIEFING_DAILY: (limit?: number) => `/api/briefing/daily${limit ? `?limit=${limit}` : ""}`,
@@ -17,6 +21,11 @@ export const API_PATHS = {
   AKG_SYNC_SEARCH: "/api/akg/sync/search",
   CREDIT_BALANCE: "/api/credits/balance",
   CREDIT_TRANSACTIONS: (limit?: number) => `/api/credits/transactions${limit ? `?limit=${limit}` : ""}`,
+  ORG_CREATE: "/api/org",
+  TEAM_CONTEXT: "/api/team/context",
+  TEAM_MEMBERS: "/api/team/members",
+  TEAM_INVITES: "/api/team/invites",
+  TEAM_INVITES_ACCEPT: (code: string) => `/api/team/invites/${code}/accept`,
 } as const;
 
 export function getConfig() {
@@ -24,6 +33,7 @@ export function getConfig() {
     baseUrl: resolveBaseUrl(),
     token: resolveToken(),
     syncUrl: CLOUD_URL,
+    teamId: resolveTeamId(),
     openaiKey: OPENAI_KEY,
     anthropicKey: ANTHROPIC_KEY,
   };
