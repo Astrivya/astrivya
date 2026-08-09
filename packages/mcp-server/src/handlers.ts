@@ -1,7 +1,14 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { AkgQuery, type AkgStorage, GraphTraversal, ImpactAnalyzer } from "@astrivya/akg-core";
+import {
+  AkgQuery,
+  type AkgStorage,
+  EMBEDDING_DIM,
+  EMBEDDING_MODEL,
+  GraphTraversal,
+  ImpactAnalyzer,
+} from "@astrivya/akg-core";
 import { API_PATHS, getConfig, syncCall } from "./api";
 import type { ToolPlugin } from "./plugin";
 import { getStatus, readJournal } from "./status";
@@ -202,6 +209,7 @@ function buildDigestPayload(limit: number): {
     counts: { nodes: number; chunks: number; embeddings: number };
   };
   approx_tokens: number;
+  team?: Record<string, unknown>;
 } {
   const s = getStorage();
   const stats = s.getStats();
@@ -246,11 +254,19 @@ function persistDigest(payload: ReturnType<typeof buildDigestPayload>): void {
   }
 }
 
-/** Recompute + persist the digest. Called at server startup so the plugin has data immediately. */
-export function refreshContextDigest(): void {
+/**
+ * Recompute + persist the digest. Called at server startup so the plugin has
+ * data immediately. Fetches the team block when running in team mode.
+ */
+export async function refreshContextDigest(): Promise<void> {
   if (!storage) return;
   try {
-    persistDigest(buildDigestPayload(8));
+    const payload = buildDigestPayload(8);
+    if (getConfig().teamId) {
+      const team = await teamDigestBlock();
+      if (team) payload.team = team;
+    }
+    persistDigest(payload);
   } catch {
     // best-effort
   }
@@ -272,15 +288,39 @@ async function teamDigestBlock(): Promise<Record<string, unknown> | undefined> {
     const members = (cloud?.members || []).length;
     const decisions = (cloud?.recentDecisions || []).slice(0, 3).map((d: any) => d.title);
     return {
-      team: {
-        mcpId: teamId,
-        name: org?.name ?? null,
-        members,
-        recent_decisions: decisions,
-      },
+      mcpId: teamId,
+      name: org?.name ?? null,
+      members,
+      recent_decisions: decisions,
     };
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Cloud semantic search over the org graph. Sends the query embedding when
+ * the local embedder produced one, otherwise the server falls back to its
+ * keyword search. Returns `{ nodes, mode }`; never throws (cloud is optional).
+ */
+async function cloudSearchNodes(
+  query: string,
+  embedding: number[] | undefined,
+  limit: number,
+): Promise<{ nodes: any[]; mode: string }> {
+  const { syncUrl, token } = getConfig();
+  if (!syncUrl || !token) return { nodes: [], mode: "none" };
+  try {
+    const body: Record<string, unknown> = { query, limit };
+    if (embedding && embedding.length === EMBEDDING_DIM) {
+      body.embedding = embedding;
+      body.model = EMBEDDING_MODEL;
+      body.dim = EMBEDDING_DIM;
+    }
+    const cloud = await syncCall(API_PATHS.AKG_SYNC_SEARCH, "POST", body);
+    return { nodes: cloud.nodes || [], mode: cloud.mode || "keyword" };
+  } catch {
+    return { nodes: [], mode: "none" };
   }
 }
 
@@ -298,21 +338,20 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
     let source: "local" | "cloud" = "local";
     let note: string | undefined;
     if (getConfig().syncUrl && getConfig().token) {
-      try {
-        const cloud = await syncCall(API_PATHS.AKG_SYNC_SEARCH, "POST", { query: q, limit });
-        cloudNodes = (cloud.nodes || []).map((n: any) => ({
-          id: n.id,
-          label: n.label,
-          content: n.content,
-          type: n.type,
-          source: "cloud",
-          score: 1,
-          filePath: n.metadata?.filePath || "",
-        }));
+      const embedding = await getQuery().embedQuery(q);
+      const { nodes, mode } = await cloudSearchNodes(q, embedding, limit);
+      cloudNodes = nodes.map((n: any) => ({
+        id: n.id,
+        label: n.label,
+        content: n.content,
+        type: n.type,
+        source: mode === "vector" ? "cloud-vector" : "cloud",
+        score: typeof n.score === "number" ? n.score : 1,
+        filePath: n.metadata?.filePath || "",
+      }));
+      if (cloudNodes.length > 0) {
         source = "cloud";
-        note = "Merged cloud + local results";
-      } catch {
-        // sync unavailable — use local results only
+        note = mode === "vector" ? "Merged cloud vector + local results" : "Merged cloud keyword + local results";
       }
     }
 
@@ -614,13 +653,14 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
   get_context_digest: async (args) => {
     const limit = args?.limit || 8;
     const payload = buildDigestPayload(limit);
-    if (getConfig().teamId) {
+    const inTeamMode = Boolean(getConfig().teamId);
+    if (inTeamMode) {
       const team = await teamDigestBlock();
-      if (team) return envelope({ ...payload, team }, { note: "Session-start context digest (team mode)" });
+      if (team) payload.team = team;
     }
     persistDigest(payload);
     return envelope(payload, {
-      note: "Session-start context digest",
+      note: inTeamMode ? "Session-start context digest (team mode)" : "Session-start context digest",
       quality: getStorage().getStats().chunks > 0 ? "high" : "low",
     });
   },
