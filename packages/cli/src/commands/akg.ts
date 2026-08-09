@@ -1,9 +1,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { AkgQuery, AkgStorage, GraphTraversal, ImpactAnalyzer } from "@astrivya/akg-core";
+import {
+  AkgQuery,
+  AkgStorage,
+  EMBEDDING_DIM,
+  EMBEDDING_MODEL,
+  GraphTraversal,
+  ImpactAnalyzer,
+} from "@astrivya/akg-core";
 import { AkgEmbedder, AkgIndexer } from "@astrivya/akg-indexer";
 import type { Command } from "commander";
 import envPaths from "env-paths";
+import { getBaseUrl, getOrgId, getToken } from "../lib/compat";
 import { color, error, getErrorMessage, startSpinner, success, warn } from "../lib/output";
 
 /** Generate embeddings for all un-embedded chunks. Returns null if unavailable (FTS-only fallback). */
@@ -22,6 +30,75 @@ async function embedChunks(
   }
 }
 
+/**
+ * Push chunk embeddings to the team cloud graph (`/api/akg/sync/push`).
+ * No-op unless the user is authenticated and belongs to an org — sync is an
+ * explicit, tier-gated optional extra, so it must never break indexing.
+ */
+async function pushChunkEmbeddings(storage: AkgStorage): Promise<void> {
+  const token = getToken();
+  const baseUrl = getBaseUrl();
+  const orgId = getOrgId();
+  if (!token || !orgId || !baseUrl) {
+    warn(
+      "Cloud sync skipped: authenticate (`astrivya auth login`) and join/create a team (`astrivya team create|join`) first.",
+    );
+    return;
+  }
+
+  const rows = storage.runQuery(`
+    SELECT c.id, c.node_id, c.file_path, c.start_line, c.end_line, c.content, e.vector
+    FROM chunks c
+    LEFT JOIN embeddings e ON e.chunk_id = c.id
+  `);
+
+  const nodes = (rows || []).map((c: any) => {
+    let embedding: number[] | undefined;
+    if (c.vector) {
+      const raw = c.vector instanceof Uint8Array ? c.vector : new Uint8Array(c.vector);
+      const floats = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
+      embedding = Array.from(floats);
+    }
+    return {
+      id: c.id,
+      label: `chunk:${c.file_path}`,
+      type: "chunk",
+      content: c.content,
+      metadata: {
+        filePath: c.file_path,
+        startLine: c.start_line ?? null,
+        endLine: c.end_line ?? null,
+      },
+      ...(embedding ? { embedding, embedding_model: EMBEDDING_MODEL, embedding_dim: EMBEDDING_DIM } : {}),
+    };
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/api/akg/sync/push`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ org_id: orgId, nodes, full_sync: true }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      if (res.status === 402) {
+        warn("Cloud team sync requires an active Pro subscription — pushed locally only.");
+      } else {
+        warn(`Cloud sync failed (${res.status}): ${text.slice(0, 200)}`);
+      }
+      return;
+    }
+    const result = (await res.json()) as { nodesCreated?: number; nodesUpdated?: number };
+    success(`Cloud sync pushed ${result.nodesCreated ?? 0} new, ${result.nodesUpdated ?? 0} updated chunks.`);
+  } catch (err: unknown) {
+    warn(`Cloud sync unreachable: ${getErrorMessage(err)}`);
+  }
+}
+
 export function registerAkg(program: Command): void {
   const akg = program.command("akg").description("Manage local repository knowledge graph (AKG)");
 
@@ -29,6 +106,7 @@ export function registerAkg(program: Command): void {
     .command("init [workspacePath]")
     .description("Initialize and index workspace files (code, docs, ADRs, agent logs) into local akg.db")
     .option("--no-embed", "Skip generating vector embeddings locally (ONNX)")
+    .option("--sync", "Push chunk embeddings to your Astrivya team cloud graph after indexing")
     .action(async (workspacePath, options) => {
       const targetPath = workspacePath ? path.resolve(workspacePath) : process.cwd();
       const spinner = startSpinner("Initializing local AKG database...");
@@ -55,6 +133,9 @@ export function registerAkg(program: Command): void {
         success(
           `Indexed ${result.filesIndexed} files -> ${result.nodesCreated} nodes, ${result.edgesCreated} edges, ${result.chunks} chunks.${embedMsg}`,
         );
+        if (options.sync) {
+          await pushChunkEmbeddings(storage);
+        }
       } catch (err: unknown) {
         spinner.fail("Failed to initialize AKG database");
         error(getErrorMessage(err));
@@ -138,6 +219,7 @@ export function registerAkg(program: Command): void {
     .command("reindex")
     .description("Incremental index updates for changed files (with embeddings)")
     .option("--no-embed", "Skip generating vector embeddings locally (ONNX)")
+    .option("--sync", "Push chunk embeddings to your Astrivya team cloud graph after reindexing")
     .action(async (options) => {
       const targetPath = process.cwd();
       const spinner = startSpinner("Checking for changes...");
@@ -163,6 +245,9 @@ export function registerAkg(program: Command): void {
         success(
           `Indexed ${result.filesIndexed} files -> ${result.nodesCreated} nodes, ${result.edgesCreated} edges, ${result.chunks} chunks.${embedMsg}`,
         );
+        if (options.sync) {
+          await pushChunkEmbeddings(storage);
+        }
       } catch (err: unknown) {
         spinner.fail("Failed to reindex AKG");
         error(getErrorMessage(err));
