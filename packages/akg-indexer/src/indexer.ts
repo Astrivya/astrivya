@@ -3,12 +3,14 @@ import * as path from "node:path";
 import type { AkgStorage } from "@astrivya/akg-core";
 import { AdrParser } from "./adr-parser";
 import { AgentParser } from "./agent-parser";
+import { CodeChunker } from "./code-chunker";
 import { TodoParser } from "./todo-parser";
 
 export class AkgIndexer {
   private adrParser: AdrParser;
   private agentParser: AgentParser;
   private todoParser: TodoParser;
+  private codeChunker: CodeChunker;
 
   constructor(
     private storage: AkgStorage,
@@ -17,6 +19,7 @@ export class AkgIndexer {
     this.adrParser = new AdrParser(storage, workspacePath);
     this.agentParser = new AgentParser(storage);
     this.todoParser = new TodoParser(storage);
+    this.codeChunker = new CodeChunker(storage, workspacePath);
   }
 
   indexAll(): void {
@@ -24,12 +27,18 @@ export class AkgIndexer {
     this.todoParser.parseWorkspaceTodos(this.workspacePath);
   }
 
-  async indexWorkspace(
-    onProgress?: (msg: string) => void,
-  ): Promise<{ filesIndexed: number; nodesCreated: number; edgesCreated: number; indexed: number; failed: number }> {
+  async indexWorkspace(onProgress?: (msg: string) => void): Promise<{
+    filesIndexed: number;
+    nodesCreated: number;
+    edgesCreated: number;
+    indexed: number;
+    failed: number;
+    chunks: number;
+  }> {
     let filesIndexed = 0;
     let nodesCreated = 0;
     let edgesCreated = 0;
+    let chunks = 0;
 
     const statsBefore = this.storage.getStats();
 
@@ -38,6 +47,11 @@ export class AkgIndexer {
 
     onProgress?.("Indexing TODO files...");
     this.todoParser.parseWorkspaceTodos(this.workspacePath);
+
+    onProgress?.("Indexing code and docs...");
+    const codeResult = await this.codeChunker.indexWorkspace(onProgress);
+    filesIndexed += codeResult.files;
+    chunks += codeResult.chunks;
 
     const adrDir = path.join(this.workspacePath, "docs", "adr");
     if (fs.existsSync(adrDir)) {
@@ -63,9 +77,15 @@ export class AkgIndexer {
       filesIndexed,
       nodesCreated,
       edgesCreated,
+      chunks,
       indexed: filesIndexed,
       failed: 0,
     };
+  }
+
+  /** Index every eligible file in the workspace (full re-index). */
+  async reindexAll(onProgress?: (msg: string) => void): Promise<{ files: number; chunks: number; symbols: number }> {
+    return await this.codeChunker.indexWorkspace(onProgress);
   }
 
   async indexFile(filePath: string): Promise<boolean> {

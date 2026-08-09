@@ -12,7 +12,7 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { getByokProvider, getConfig } from "./api";
-import { handleReadResource, handleToolCall, setAkgStorage, setToolPlugins } from "./handlers";
+import { handleReadResource, handleToolCall, refreshContextDigest, setAkgStorage, setToolPlugins } from "./handlers";
 import { checkForUpdates, formatBanner, isOptedOut } from "./lib/update-notifier";
 import { CURRENT_VERSION } from "./lib/version";
 import { loadToolPlugins } from "./plugin";
@@ -112,6 +112,7 @@ async function runStdioServer() {
   const byok = getByokProvider();
   if (byok) console.error(`[Astrivya MCP] BYOK provider: ${byok.name}`);
   const workspacePath = await initAkg();
+  refreshContextDigest();
   maybePrintUpdateBanner();
 
   initStatus({ workspace: workspacePath, mode: "stdio", version: CURRENT_VERSION });
@@ -138,6 +139,7 @@ async function runHttpServer(port: number) {
   const byok = getByokProvider();
   if (byok) console.error(`[Astrivya MCP] BYOK provider: ${byok.name}`);
   const workspacePath = await initAkg();
+  refreshContextDigest();
   maybePrintUpdateBanner();
 
   initStatus({ workspace: workspacePath, mode: "http", version: CURRENT_VERSION });

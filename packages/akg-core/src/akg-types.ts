@@ -105,4 +105,10 @@ export interface RetrievalResult {
   content: string;
   score: number;
   source: "fts" | "semantic" | "graph";
+  /** Unix ms when the item was first indexed. */
+  createdAt?: number;
+  /** Unix ms when the item was last verified/re-indexed. */
+  lastVerifiedAt?: number;
+  /** True when the chunk/node is older than the staleness threshold. */
+  stale?: boolean;
 }

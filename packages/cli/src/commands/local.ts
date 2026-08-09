@@ -154,9 +154,23 @@ export function registerLocal(program: Command): void {
         // 4. Real Downloads
         const modelsDir = getModelsDir();
         const embedUrl = "https://huggingface.co/Snowflake/snowflake-arctic-embed-xs/resolve/main/onnx/model.onnx";
-        const embedDest = path.join(modelsDir, "model.onnx");
-
+        const onnxDir = path.join(modelsDir, "onnx");
+        fs.mkdirSync(onnxDir, { recursive: true });
+        const embedDest = path.join(onnxDir, "model.onnx");
         await downloadFile(embedUrl, embedDest, "Snowflake Arctic Embeddings (ONNX, ~45MB)");
+
+        // The @xenova/transformers pipeline (local_files_only) also needs the
+        // tokenizer + config files (repo root), not just the onnx/ model.
+        for (const component of [
+          "config.json",
+          "tokenizer.json",
+          "tokenizer_config.json",
+          "special_tokens_map.json",
+          "vocab.txt",
+        ]) {
+          const url = `https://huggingface.co/Snowflake/snowflake-arctic-embed-xs/resolve/main/${component}`;
+          await downloadFile(url, path.join(modelsDir, component), `Snowflake Arctic Embeddings (${component})`);
+        }
 
         const modelUrl =
           profile === "lite"

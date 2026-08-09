@@ -27,5 +27,6 @@ export default defineConfig({
     "env-paths",
     "sql.js",
     "node-llama-cpp",
+    "@xenova/transformers",
   ],
 });

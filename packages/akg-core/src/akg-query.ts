@@ -5,6 +5,8 @@ import type { QueryIntent, RetrievalResult } from "./akg-types";
 
 let _embedderWarned = false;
 
+const STALE_MS = 30 * 24 * 60 * 60 * 1000;
+
 export class AkgQuery {
   private embedder: any = null;
 
@@ -12,6 +14,25 @@ export class AkgQuery {
     private storage: AkgStorage,
     _workspacePath: string,
   ) {}
+
+  /** Attach freshness metadata (created/lastVerified/stale) to a candidate. */
+  private enrichFreshness<T extends { createdAt?: number; lastVerifiedAt?: number; stale?: boolean }>(
+    r: T,
+    createdAt?: number | null,
+    updatedAt?: number | null,
+  ): T {
+    r.createdAt = createdAt ?? undefined;
+    r.lastVerifiedAt = updatedAt ?? undefined;
+    r.stale = typeof updatedAt === "number" ? Date.now() - updatedAt > STALE_MS : undefined;
+    return r;
+  }
+
+  private recencyBoost(updatedAt?: number): number {
+    if (!updatedAt) return 1;
+    const age = Date.now() - updatedAt;
+    if (age <= 0) return 1;
+    return Math.max(0.5, 1 / (1 + age / STALE_MS));
+  }
 
   private async getEmbedder(): Promise<any> {
     if (this.embedder) return this.embedder;
@@ -111,6 +132,7 @@ export class AkgQuery {
           score,
           source: "fts",
         });
+        this.enrichFreshness(results[results.length - 1], row.created_at, row.updated_at);
       }
       return results.sort((a, b) => b.score - a.score).slice(0, limit);
     } catch {
@@ -125,7 +147,7 @@ export class AkgQuery {
 
       const queryVector = await emb.embed(query);
       const rows = this.storage.runQuery(`
-        SELECT e.chunk_id, e.vector, c.content, c.file_path, c.start_line, c.end_line
+        SELECT e.chunk_id, e.vector, c.content, c.file_path, c.start_line, c.end_line, c.created_at, c.updated_at
         FROM embeddings e
         JOIN chunks c ON e.chunk_id = c.id;
       `);
@@ -149,7 +171,7 @@ export class AkgQuery {
         const sim = queryLength > 0 && vecLength > 0 ? dotProduct / (queryLength * vecLength) : 0;
 
         if (sim > 0.25) {
-          matches.push({
+          const match: RetrievalResult = {
             chunkId: row.chunk_id,
             filePath: row.file_path,
             startLine: row.start_line,
@@ -157,7 +179,9 @@ export class AkgQuery {
             content: row.content,
             score: sim,
             source: "semantic",
-          });
+          };
+          this.enrichFreshness(match, row.created_at, row.updated_at);
+          matches.push(match);
         }
       }
 
@@ -199,13 +223,15 @@ export class AkgQuery {
       visited.add(node.id);
 
       if (node.content) {
-        results.push({
+        const r: RetrievalResult = {
           nodeId: node.id,
           filePath: node.source_file || "",
           content: node.content,
           score: 1.0,
           source: "graph",
-        });
+        };
+        this.enrichFreshness(r, node.created_at, node.updated_at);
+        results.push(r);
       }
 
       try {
@@ -215,13 +241,15 @@ export class AkgQuery {
           visited.add(neighbor.node.id);
 
           if (neighbor.node.content) {
-            results.push({
+            const r: RetrievalResult = {
               nodeId: neighbor.node.id,
               filePath: neighbor.node.sourceFile || "",
               content: neighbor.node.content,
               score: 0.7,
               source: "graph",
-            });
+            };
+            this.enrichFreshness(r, neighbor.node.createdAt, neighbor.node.updatedAt);
+            results.push(r);
           }
         }
       } catch {
@@ -247,18 +275,19 @@ export class AkgQuery {
 
       for (const r of results) {
         const key = r.chunkId || r.nodeId || `${r.filePath}:${r.startLine}-${r.endLine}`;
-        const normalizedScore = (r.score / maxScore) * weight;
+        const recency = this.recencyBoost(r.lastVerifiedAt ?? r.createdAt);
+        const boostedScore = (r.score / maxScore) * weight * recency;
 
         const existing = fusedMap.get(key);
         if (existing) {
-          existing.score += normalizedScore;
-          if (normalizedScore > existing.score - normalizedScore) {
+          existing.score += boostedScore;
+          if (boostedScore > existing.score - boostedScore) {
             existing.source = r.source;
           }
         } else {
           fusedMap.set(key, {
             ...r,
-            score: normalizedScore,
+            score: boostedScore,
           });
         }
       }

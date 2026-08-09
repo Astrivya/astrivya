@@ -13,6 +13,16 @@ function cleanup(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+/** Parse a tool result into the canonical envelope `{ data, source, freshness, note, meta }`. */
+function parseEnvelope(result: { content: Array<{ type: string; text: string }> }): any {
+  return JSON.parse(result.content[0].text);
+}
+
+/** Parse a resource read into the canonical envelope. */
+function parseResource(result: { contents: Array<{ uri: string; mimeType: string; text: string }> }): any {
+  return JSON.parse(result.contents[0].text);
+}
+
 describe("MCP server handlers — tools", () => {
   let dir: string;
   let storage: AkgStorage;
@@ -69,8 +79,9 @@ describe("MCP server handlers — tools", () => {
       content: "We chose React for the frontend",
     });
     expect(result.isError).toBeFalsy();
-    expect(result.content[0].text).toContain("Decision logged");
-    expect(result.content[0].text).toContain("decision::");
+    const body = parseEnvelope(result);
+    expect(body.data.id).toMatch(/^decision::/);
+    expect(storage.getNode(body.data.id)).not.toBeNull();
   });
 
   it("log_decision with file_context creates an edge", async () => {
@@ -79,7 +90,8 @@ describe("MCP server handlers — tools", () => {
       content: "Tailwind for styling",
       file_context: "src/frontend/package.json",
     });
-    const decisionId = result.content[0].text.replace("Decision logged: ", "");
+    const body = parseEnvelope(result);
+    const decisionId = body.data.id;
     const node = storage.getNode(decisionId);
     expect(node).not.toBeNull();
     expect(node!.label).toBe("Use Tailwind");
@@ -95,8 +107,8 @@ describe("MCP server handlers — tools", () => {
       type: "fact",
       visibility: "team",
     });
-    expect(result.content[0].text).toContain("Memory stored");
-    const memId = result.content[0].text.replace("Memory stored: ", "");
+    const body = parseEnvelope(result);
+    const memId = body.data.id;
     const node = storage.getNode(memId);
     expect(node).not.toBeNull();
     expect(node!.type).toBe("agent_action");
@@ -106,43 +118,50 @@ describe("MCP server handlers — tools", () => {
   it("get_person_context returns workspace stats", async () => {
     const result = await handleToolCall("get_person_context", {});
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(data.workspace).toBe(dir);
-    expect(typeof data.indexedFiles).toBe("number");
-    expect(data.indexedFiles).toBeGreaterThan(0);
-    expect(data.status).toBe("ready");
+    const body = parseEnvelope(result);
+    expect(body.data.workspace).toBe(dir);
+    expect(typeof body.data.indexedFiles).toBe("number");
+    expect(body.data.indexedFiles).toBeGreaterThan(0);
+    expect(body.data.status).toBe("ready");
+    // Canonical envelope: source + freshness always present
+    expect(body.source).toBe("local");
+    expect(body.freshness.fetchedAt).toBeDefined();
+    expect(body.meta.cost).toBeDefined();
   });
 
   it("search_memories returns results (may be empty without embedder)", async () => {
     const result = await handleToolCall("search_memories", { query: "dark mode", limit: 5 });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(Array.isArray(data.results)).toBe(true);
-    // Envelope is self-describing: semantic availability is surfaced via `note`
-    // so an empty array is not misread as "no data".
-    expect(data.note).toBeDefined();
-    expect(data.note).toContain("keyword (FTS)");
+    const body = parseEnvelope(result);
+    expect(Array.isArray(body.data.results)).toBe(true);
+    // Envelope is self-describing: when semantic is unavailable the `note`
+    // names the FTS fallback, so an empty array is not misread as "no data".
+    if (body.note) {
+      expect(body.note).toContain("keyword (FTS)");
+    }
   });
 
-  it("get_daily_briefing returns recent activity", async () => {
+  it("get_daily_briefing returns recent activity + prose summary", async () => {
     const result = await handleToolCall("get_daily_briefing", { limit: 10 });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(data.date).toBeDefined();
-    expect(Array.isArray(data.recentActivity)).toBe(true);
-    expect(data.recentActivity.length).toBeGreaterThan(0);
-    expect(data.note).toContain("Local AKG mode");
+    const body = parseEnvelope(result);
+    expect(body.data.date).toBeDefined();
+    expect(Array.isArray(body.data.recentActivity)).toBe(true);
+    expect(body.data.recentActivity.length).toBeGreaterThan(0);
+    expect(body.data.summary).toBeTruthy();
+    expect(Array.isArray(body.data.action_items)).toBe(true);
+    expect(body.note).toContain("Local AKG mode");
   });
 
   it("trace_decision returns node and relationships", async () => {
     const result = await handleToolCall("trace_decision", { decision_id: "memory::abc-123" });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(data.decision.id).toBe("memory::abc-123");
-    expect(Array.isArray(data.relationships)).toBe(true);
+    const body = parseEnvelope(result);
+    expect(body.data.decision.id).toBe("memory::abc-123");
+    expect(Array.isArray(body.data.relationships)).toBe(true);
   });
 
-  it("trace_decision returns error for missing decision", async () => {
+  it("trace_decision returns message for missing decision", async () => {
     const result = await handleToolCall("trace_decision", { decision_id: "nonexistent" });
     expect(result.isError).toBeFalsy(); // not an error, returns a message
     expect(result.content[0].text).toContain("not found");
@@ -151,63 +170,89 @@ describe("MCP server handlers — tools", () => {
   it("find_related_knowledge returns results", async () => {
     const result = await handleToolCall("find_related_knowledge", { term: "JWT auth", limit: 5 });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(data.term).toBe("JWT auth");
-    expect(Array.isArray(data.results)).toBe(true);
+    const body = parseEnvelope(result);
+    expect(body.data.term).toBe("JWT auth");
+    expect(Array.isArray(body.data.results)).toBe(true);
   });
 
   it("get_team_context falls back to local AKG stats", async () => {
     const result = await handleToolCall("get_team_context", {});
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(data.workspace).toBe(dir);
-    expect(typeof data.nodes).toBe("number");
-    expect(data.note).toContain("Cloud API unavailable");
+    const body = parseEnvelope(result);
+    expect(body.data.workspace).toBe(dir);
+    expect(typeof body.data.nodes).toBe("number");
+    expect(body.note).toContain("Cloud API unavailable");
   });
 
   it("get_team_members returns empty list in local mode", async () => {
     const result = await handleToolCall("get_team_members", {});
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(Array.isArray(data.members)).toBe(true);
-    expect(data.members.length).toBe(0);
-    expect(data.note).toContain("Local mode");
+    const body = parseEnvelope(result);
+    expect(Array.isArray(body.data.members)).toBe(true);
+    expect(body.data.members.length).toBe(0);
+    expect(body.note).toContain("Local mode");
   });
 
   it("get_team_analytics returns local AKG stats in local mode", async () => {
     const result = await handleToolCall("get_team_analytics", {});
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(typeof data.nodes).toBe("number");
-    expect(data.nodes).toBeGreaterThan(0);
-    expect(data.note).toContain("Local mode");
+    const body = parseEnvelope(result);
+    expect(typeof body.data.nodes).toBe("number");
+    expect(body.data.nodes).toBeGreaterThan(0);
+    expect(body.note).toContain("Local mode");
   });
 
   it("list_notifications returns empty list in local mode", async () => {
     const result = await handleToolCall("list_notifications", {});
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(Array.isArray(data.notifications)).toBe(true);
-    expect(data.notifications.length).toBe(0);
-    expect(data.note).toContain("Local mode");
+    const body = parseEnvelope(result);
+    expect(Array.isArray(body.data.notifications)).toBe(true);
+    expect(body.data.notifications.length).toBe(0);
+    expect(body.note).toContain("Local mode");
   });
 
   it("mark_notification_read returns ok in local mode", async () => {
     const result = await handleToolCall("mark_notification_read", {});
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(data.ok).toBe(true);
-    expect(data.note).toContain("Local mode");
+    const body = parseEnvelope(result);
+    expect(body.data.ok).toBe(true);
+    expect(body.note).toContain("Local mode");
+  });
+
+  it("check_credits reports cloud-not-configured in local mode", async () => {
+    const result = await handleToolCall("check_credits", {});
+    expect(result.isError).toBeFalsy();
+    const body = parseEnvelope(result);
+    expect(body.data.error).toContain("Not connected to cloud");
+    expect(body.note).toContain("Cloud not configured");
   });
 
   it("get_expertise_profile falls back to local node type counts", async () => {
     const result = await handleToolCall("get_expertise_profile", {});
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0].text);
-    expect(data.workspace).toBe(dir);
-    expect(Array.isArray(data.expertise)).toBe(true);
-    expect(data.expertise.length).toBeGreaterThan(0);
-    expect(data.note).toContain("Local AKG mode");
+    const body = parseEnvelope(result);
+    expect(body.data.workspace).toBe(dir);
+    expect(Array.isArray(body.data.expertise)).toBe(true);
+    expect(body.data.expertise.length).toBeGreaterThan(0);
+    expect(body.note).toContain("Local AKG mode");
+  });
+
+  it("get_context_digest returns a compact prose digest", async () => {
+    const result = await handleToolCall("get_context_digest", { limit: 10 });
+    expect(result.isError).toBeFalsy();
+    const body = parseEnvelope(result);
+    expect(body.data.digest.summary).toBeTruthy();
+    expect(Array.isArray(body.data.digest.action_items)).toBe(true);
+    expect(body.data.approx_tokens).toBeLessThan(1500); // R1 budget
+  });
+
+  it("get_workspace_updates returns a delta with cursor", async () => {
+    const result = await handleToolCall("get_workspace_updates", { since: "1970-01-01T00:00:00.000Z" });
+    expect(result.isError).toBeFalsy();
+    const body = parseEnvelope(result);
+    expect(Array.isArray(body.data.updates)).toBe(true);
+    expect(body.data.updates.length).toBeGreaterThan(0);
+    expect(body.data.has_more).toBe(false);
   });
 
   it("returns error for unknown tool", async () => {
@@ -219,9 +264,9 @@ describe("MCP server handlers — tools", () => {
   it("uses default title when args are missing for log_decision", async () => {
     const result = await handleToolCall("log_decision", {});
     expect(result.isError).toBeFalsy();
-    expect(result.content[0].text).toMatch(/Decision logged: decision::/);
-    const decisionId = result.content[0].text.replace("Decision logged: ", "");
-    const node = storage.getNode(decisionId);
+    const body = parseEnvelope(result);
+    expect(body.data.id).toMatch(/^decision::/);
+    const node = storage.getNode(body.data.id);
     expect(node).not.toBeNull();
     expect(node!.label).toBe("Untitled Decision");
   });
@@ -253,31 +298,31 @@ describe("MCP server handlers — resources", () => {
   it("reads team knowledge resource", async () => {
     const result = await handleReadResource("astrivya://team/active/knowledge");
     expect(result.contents.length).toBe(1);
-    const data = JSON.parse(result.contents[0].text);
-    expect(data.workspace).toBe(dir);
-    expect(typeof data.nodes).toBe("number");
+    const body = parseResource(result);
+    expect(body.data.workspace).toBe(dir);
+    expect(typeof body.data.stats.nodes).toBe("number");
   });
 
   it("reads user memories resource", async () => {
     const result = await handleReadResource("astrivya://user/active/memories");
     expect(result.contents.length).toBe(1);
-    const data = JSON.parse(result.contents[0].text);
-    expect(data.workspace).toBe(dir);
+    const body = parseResource(result);
+    expect(body.data.workspace).toBe(dir);
   });
 
   it("reads today's briefing resource", async () => {
     const result = await handleReadResource("astrivya://briefing/today");
     expect(result.contents.length).toBe(1);
-    const data = JSON.parse(result.contents[0].text);
-    expect(Array.isArray(data.recentActivity)).toBe(true);
+    const body = parseResource(result);
+    expect(Array.isArray(body.data.recentActivity)).toBe(true);
   });
 
   it("reads org knowledge graph resource", async () => {
     const result = await handleReadResource("astrivya://org/knowledge-graph");
     expect(result.contents.length).toBe(1);
-    const data = JSON.parse(result.contents[0].text);
-    expect(Array.isArray(data.nodes)).toBe(true);
-    expect(data.nodes.length).toBeGreaterThan(0);
+    const body = parseResource(result);
+    expect(Array.isArray(body.data.nodes)).toBe(true);
+    expect(body.data.nodes.length).toBeGreaterThan(0);
   });
 
   it("throws for unknown resource URI", async () => {

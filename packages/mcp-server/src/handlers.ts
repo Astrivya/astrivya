@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { AkgQuery, type AkgStorage, GraphTraversal, ImpactAnalyzer } from "@astrivya/akg-core";
 import { API_PATHS, getConfig, syncCall } from "./api";
 import type { ToolPlugin } from "./plugin";
@@ -13,6 +15,15 @@ let _toolPlugins: ToolPlugin[] = [];
 
 const SYNC_KEY = process.env.ASTRIVYA_SYNC_KEY || "";
 const CLOUD_URL = process.env.ASTRIVYA_CLOUD_URL || "";
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+type ToolResult = { content: Array<{ type: string; text: string }>; isError?: boolean };
+
+interface DigestFreshness {
+  fetchedAt: string;
+  lastUpdatedAt?: string;
+  stale?: boolean;
+}
 
 async function trySync(data: { nodes: any[]; edges?: any[] }) {
   if (!SYNC_KEY && !getConfig().token) return;
@@ -56,16 +67,208 @@ function getQuery(): AkgQuery {
   return query;
 }
 
-const LOCAL_HANDLERS: Record<
-  string,
-  (args: any) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>
-> = {
+// ---------------------------------------------------------------------------
+// Canonical response envelope (R4 freshness + D5 source, D4 cost/quality).
+// Every tool/resource resolves to `{ data, source, freshness, note, meta }`.
+// ---------------------------------------------------------------------------
+
+function iso(ts?: number | null): string | undefined {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return undefined;
+  return new Date(ts).toISOString();
+}
+
+function localFreshness(): DigestFreshness {
+  const s = getStorage();
+  const row = s.runQuery("SELECT MAX(updated_at) AS m FROM nodes")[0] as { m?: number | null } | undefined;
+  const lastUpdatedAt = iso(row?.m);
+  const fetchedAt = new Date().toISOString();
+  return {
+    fetchedAt,
+    lastUpdatedAt,
+    stale: typeof row?.m === "number" ? Date.now() - row.m > 30 * DAY_MS : undefined,
+  };
+}
+
+function envelopePayload<T>(
+  data: T,
+  opts: {
+    source?: "local" | "cloud";
+    note?: string;
+    cost?: "cheap" | "moderate" | "expensive";
+    quality?: "high" | "medium" | "low";
+    freshness?: DigestFreshness;
+  } = {},
+): Record<string, unknown> {
+  const { source = "local", note, cost = "cheap", quality = "medium", freshness = localFreshness() } = opts;
+  const payload: Record<string, unknown> = { data, source, freshness, meta: { cost, quality } };
+  if (note) payload.note = note;
+  return payload;
+}
+
+function envelope<T>(data: T, opts: Parameters<typeof envelopePayload>[1] = {}): ToolResult {
+  return { content: [{ type: "text", text: JSON.stringify(envelopePayload(data, opts), null, 2) }] };
+}
+
+// ---------------------------------------------------------------------------
+// Prose helpers (R6: pre-digested summaries instead of raw JSON).
+// Deterministic, LLM-free — cheap enough to run on every call.
+// ---------------------------------------------------------------------------
+
+interface BriefNode {
+  id: string;
+  label: string;
+  type: string;
+  content?: string;
+  updated_at?: number;
+}
+
+function proseSummary(nodes: BriefNode[], stats: { nodes: number; chunks: number; embeddings: number }): string {
+  const nonChunk = nodes.filter((n) => n.type !== "chunk");
+  const sentences: string[] = [];
+
+  const files = nonChunk.filter((n) => n.type === "file");
+  const adrs = nonChunk.filter((n) => n.type === "adr");
+  const memories = nonChunk.filter((n) => n.type === "agent_action");
+  const others = nonChunk.length - files.length - adrs.length - memories.length;
+
+  const areas = nonChunk
+    .map((n) => n.label)
+    .filter((l): l is string => !!l)
+    .slice(0, 3);
+  const areaText = areas.length ? ` Active areas include: ${areas.join(", ")}.` : "";
+
+  if (nonChunk.length === 0) {
+    if (nodes.length > 0) {
+      sentences.push(`The knowledge graph recently indexed ${nodes.length} new chunk${nodes.length === 1 ? "" : "s"}.`);
+    } else {
+      sentences.push("No indexed activity in the current window.");
+    }
+  } else {
+    const parts = [];
+    if (files.length) parts.push(`${files.length} file${files.length === 1 ? "" : "s"}`);
+    if (adrs.length) parts.push(`${adrs.length} decision${adrs.length === 1 ? "" : "s"}`);
+    if (memories.length) parts.push(`${memories.length} memor${memories.length === 1 ? "y" : "ies"}`);
+    if (others) parts.push(`${others} other item${others === 1 ? "" : "s"}`);
+    sentences.push(
+      `The workspace saw ${nonChunk.length} recent change${nonChunk.length === 1 ? "" : "s"} (${parts.join(", ")}).`,
+    );
+  }
+  if (stats.chunks > 0) {
+    sentences.push(
+      `The knowledge graph holds ${stats.nodes} nodes, ${stats.chunks} chunks and ${stats.embeddings} embeddings.`,
+    );
+  }
+  sentences.push(`${areaText} Run \`astrivya akg reindex\` to refresh stale files.`);
+
+  return sentences.filter(Boolean).join(" ").trim();
+}
+
+function actionItems(nodes: BriefNode[], stats: { nodes: number; chunks: number; embeddings: number }): string[] {
+  const items: string[] = [];
+  if (stats.nodes === 0) items.push("Run `astrivya akg init` to index the workspace first.");
+  if (stats.chunks > stats.embeddings)
+    items.push("Some chunks lack embeddings — run `astrivya akg init` (embeds by default) to backfill.");
+  const oldest = nodes.length ? nodes[nodes.length - 1] : undefined;
+  if (oldest && typeof oldest.updated_at === "number" && Date.now() - oldest.updated_at > 30 * DAY_MS)
+    items.push("Recent activity is old — the graph may be stale; reindex to refresh.");
+  const adrs = nodes.filter((n) => n.type === "adr");
+  if (adrs.length > 0) items.push("Review the logged decisions above before making related changes.");
+  return items;
+}
+
+function toBriefNode(r: Record<string, unknown>): BriefNode {
+  return {
+    id: String(r.id ?? ""),
+    label: String(r.label ?? r.id ?? ""),
+    type: String(r.type ?? "unknown"),
+    content: r.content != null ? String(r.content) : undefined,
+    updated_at: typeof r.updated_at === "number" ? r.updated_at : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Context digest (R1). Built from the local graph and persisted to
+// `<workspace>/.astrivya/mcp/context-digest.json` so an OpenCode workspace
+// plugin can auto-inject it into the system prompt without any dependency on
+// @astrivya packages at runtime.
+// ---------------------------------------------------------------------------
+
+function buildDigestPayload(limit: number): {
+  digest: {
+    workspace: string;
+    summary: string;
+    recent: string[];
+    action_items: string[];
+    counts: { nodes: number; chunks: number; embeddings: number };
+  };
+  approx_tokens: number;
+} {
+  const s = getStorage();
+  const stats = s.getStats();
+  const since = Date.now() - DAY_MS;
+  const recentNodes = s.runQuery(
+    "SELECT id, label, type, content, updated_at FROM nodes WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT ?",
+    [since, limit],
+  );
+  const nodes = recentNodes.map(toBriefNode);
+
+  const summary = proseSummary(nodes, stats);
+  const actions = actionItems(nodes, stats);
+  const topLabels = nodes
+    .filter((n) => n.type !== "chunk" && n.label && n.label.length <= 60)
+    .slice(0, 5)
+    .map((n) => n.label);
+
+  const digest = {
+    workspace: workspacePath,
+    summary,
+    recent: topLabels,
+    action_items: actions,
+    counts: { nodes: stats.nodes, chunks: stats.chunks, embeddings: stats.embeddings },
+  };
+
+  // ~4 chars/token rough cap; the digest is intentionally compact (R1: <1.5k tokens).
+  const approxTokens = Math.ceil(JSON.stringify(digest).length / 4);
+  return { digest, approx_tokens: approxTokens };
+}
+
+function digestFilePath(): string {
+  return path.join(workspacePath, ".astrivya", "mcp", "context-digest.json");
+}
+
+/** Best-effort write of the latest digest for the OpenCode plugin to read. */
+function persistDigest(payload: ReturnType<typeof buildDigestPayload>): void {
+  try {
+    fs.mkdirSync(path.dirname(digestFilePath()), { recursive: true });
+    fs.writeFileSync(digestFilePath(), JSON.stringify({ ...payload, refreshed_at: new Date().toISOString() }, null, 2));
+  } catch {
+    // Digest persistence is best-effort; never break a tool call over it.
+  }
+}
+
+/** Recompute + persist the digest. Called at server startup so the plugin has data immediately. */
+export function refreshContextDigest(): void {
+  if (!storage) return;
+  try {
+    persistDigest(buildDigestPayload(8));
+  } catch {
+    // best-effort
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Local tool handlers
+// ---------------------------------------------------------------------------
+
+const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
   search_memories: async (args) => {
     const q = args?.query || "";
     const limit = args?.limit || 8;
     const results = await getQuery().semanticSearch(q, limit);
 
     let cloudNodes: any[] = [];
+    let source: "local" | "cloud" = "local";
+    let note: string | undefined;
     if (getConfig().syncUrl && getConfig().token) {
       try {
         const cloud = await syncCall(API_PATHS.AKG_SYNC_SEARCH, "POST", { query: q, limit });
@@ -78,6 +281,8 @@ const LOCAL_HANDLERS: Record<
           score: 1,
           filePath: n.metadata?.filePath || "",
         }));
+        source = "cloud";
+        note = "Merged cloud + local results";
       } catch {
         // sync unavailable — use local results only
       }
@@ -87,13 +292,12 @@ const LOCAL_HANDLERS: Record<
     const merged = [...results, ...cloudNodes.filter((n) => !seen.has(n.id))].slice(0, limit);
 
     const semanticAvailable = await getQuery().semanticAvailable();
-    const note = semanticAvailable
-      ? undefined
-      : "Local knowledge graph is empty or the semantic embedder is unavailable — results are keyword (FTS) matches only. Run `astrivya akg init --index` to index files.";
+    if (!semanticAvailable) {
+      note =
+        "Local knowledge graph is empty or the semantic embedder is unavailable — results are keyword (FTS) matches only. Run `astrivya akg init --index` to index files.";
+    }
 
-    return {
-      content: [{ type: "text", text: JSON.stringify({ results: merged, note }, null, 2) }],
-    };
+    return envelope({ results: merged }, { source, note, quality: semanticAvailable ? "high" : "low" });
   },
 
   get_mcp_status: async () => {
@@ -101,41 +305,25 @@ const LOCAL_HANDLERS: Record<
     const s = getStorage();
     const stats = s.getStats();
     const journal = readJournal(workspacePath, 20);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            { ...status, akg: { nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks }, recentEvents: journal },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    return envelope(
+      { ...status, akg: { nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks }, recentEvents: journal },
+      { note: "MCP server health snapshot", quality: "high" },
+    );
   },
 
   get_person_context: async () => {
     const s = getStorage();
     const stats = s.getStats();
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              workspace: workspacePath,
-              indexedFiles: stats.nodes,
-              knowledgeChunks: stats.chunks,
-              relationships: stats.edges,
-              status: stats.nodes > 0 ? "ready" : "empty — run `astrivya akg init` to index",
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    return envelope(
+      {
+        workspace: workspacePath,
+        indexedFiles: stats.nodes,
+        knowledgeChunks: stats.chunks,
+        relationships: stats.edges,
+        status: stats.nodes > 0 ? "ready" : "empty — run `astrivya akg init` to index",
+      },
+      { note: "Local developer context", quality: stats.nodes > 0 ? "high" : "low" },
+    );
   },
 
   get_team_context: async () => {
@@ -143,40 +331,23 @@ const LOCAL_HANDLERS: Record<
     const stats = s.getStats();
     const { syncUrl, token } = getConfig();
 
-    let note = "Cloud API unavailable - using local AKG stats";
+    const note = "Cloud API unavailable - using local AKG stats";
     if (syncUrl && token) {
       try {
         const cloud = await syncCall(API_PATHS.BRIEFING_DAILY(), "GET");
-        note = "Synced team context from cloud";
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                { workspace: workspacePath, nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks, cloud, note },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        return envelope(
+          { workspace: workspacePath, nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks, cloud },
+          { source: "cloud", note: "Synced team context from cloud", quality: "high" },
+        );
       } catch {
         // fall through to local
       }
     }
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            { workspace: workspacePath, nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks, note },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    return envelope(
+      { workspace: workspacePath, nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks },
+      { note },
+    );
   },
 
   get_team_members: async () => {
@@ -192,23 +363,16 @@ const LOCAL_HANDLERS: Record<
         members = [];
       }
     }
-    return {
-      content: [{ type: "text", text: JSON.stringify({ members, note }, null, 2) }],
-    };
+    return envelope({ members }, { source: syncUrl && token ? "cloud" : "local", note });
   },
 
   get_team_analytics: async () => {
     const s = getStorage();
     const stats = s.getStats();
-    const note = "Local mode - analytics computed from local AKG";
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks, note }, null, 2),
-        },
-      ],
-    };
+    return envelope(
+      { nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks },
+      { note: "Local mode - analytics computed from local AKG" },
+    );
   },
 
   list_notifications: async () => {
@@ -224,9 +388,40 @@ const LOCAL_HANDLERS: Record<
         notifications = [];
       }
     }
-    return {
-      content: [{ type: "text", text: JSON.stringify({ notifications, note }, null, 2) }],
-    };
+    return envelope({ notifications }, { source: syncUrl && token ? "cloud" : "local", note });
+  },
+
+  check_credits: async (args) => {
+    const { syncUrl, token } = getConfig();
+    if (!syncUrl || !token) {
+      return envelope(
+        { error: "Not connected to cloud. Set ASTRIVYA_CLOUD_URL and ASTRIVYA_TOKEN." },
+        { source: "local", note: "Cloud not configured" },
+      );
+    }
+    try {
+      const balance = await syncCall(API_PATHS.CREDIT_BALANCE, "GET");
+      const limit = Math.min(Math.max(Number(args?.transactions) || 0, 0), 20);
+      const txs = limit > 0
+        ? await syncCall(API_PATHS.CREDIT_TRANSACTIONS(limit), "GET")
+        : [];
+      return envelope(
+        {
+          balance: Number(balance?.balance ?? 0),
+          lifetime_purchased: Number(balance?.lifetime_purchased ?? 0),
+          lifetime_consumed: Number(balance?.lifetime_consumed ?? 0),
+          last_monthly_refill_at: balance?.last_monthly_refill_at ?? null,
+          recent_transactions: txs || [],
+        },
+        { source: "cloud", note: "Live from cloud" },
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return envelope(
+        { error: message },
+        { source: "cloud", note: "Failed to fetch credit balance" },
+      );
+    }
   },
 
   mark_notification_read: async (_args) => {
@@ -236,16 +431,12 @@ const LOCAL_HANDLERS: Record<
       try {
         const id = _args?.id;
         await syncCall("/api/notifications/read", "PATCH", { id });
-        return {
-          content: [{ type: "text", text: JSON.stringify({ ok: true, note: "Marked read in cloud" }) }],
-        };
+        return envelope({ ok: true }, { source: "cloud", note: "Marked read in cloud", quality: "high" });
       } catch {
         // fall through to local
       }
     }
-    return {
-      content: [{ type: "text", text: JSON.stringify({ ok: true, note }) }],
-    };
+    return envelope({ ok: true }, { note });
   },
 
   get_expertise_profile: async () => {
@@ -255,15 +446,10 @@ const LOCAL_HANDLERS: Record<
       area: r.type,
       count: Number(r.count || 0),
     }));
-    const note = "Local AKG mode - expertise derived from local node types";
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ workspace: workspacePath, expertise, note }, null, 2),
-        },
-      ],
-    };
+    return envelope(
+      { workspace: workspacePath, expertise },
+      { note: "Local AKG mode - expertise derived from local node types" },
+    );
   },
 
   log_decision: async (args) => {
@@ -305,7 +491,10 @@ const LOCAL_HANDLERS: Record<
       nodes: [{ id, label: title, type: "adr", content, createdAt: timestamp, updatedAt: timestamp }],
     });
 
-    return { content: [{ type: "text", text: `Decision logged: ${id}` }] };
+    return envelope(
+      { id, label: title },
+      { note: "Decision logged to local AKG (and cloud when configured)", quality: "high" },
+    );
   },
 
   log_memory: async (args) => {
@@ -341,7 +530,7 @@ const LOCAL_HANDLERS: Record<
       ],
     });
 
-    return { content: [{ type: "text", text: `Memory stored: ${id}` }] };
+    return envelope({ id }, { note: "Memory stored in local AKG", quality: "high" });
   },
 
   search_connectors: async (args) => {
@@ -349,10 +538,13 @@ const LOCAL_HANDLERS: Record<
     const limit = args?.limit || 10;
     const results = await getQuery().semanticSearch(q, limit);
     const semanticAvailable = await getQuery().semanticAvailable();
-    const note = semanticAvailable
-      ? undefined
-      : "Semantic search unavailable — results are keyword (FTS) matches only.";
-    return { content: [{ type: "text", text: JSON.stringify({ results, note }, null, 2) }] };
+    return envelope(
+      { results },
+      {
+        note: semanticAvailable ? undefined : "Semantic search unavailable — results are keyword (FTS) matches only.",
+        quality: semanticAvailable ? "high" : "low",
+      },
+    );
   },
 
   get_daily_briefing: async (args) => {
@@ -364,23 +556,10 @@ const LOCAL_HANDLERS: Record<
         const cloud = await syncCall(API_PATHS.BRIEFING_DAILY(limit), "GET");
         const briefings = cloud?.briefings || [];
         if (briefings.length > 0 && briefings[0].id) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    date,
-                    briefings,
-                    source: "cloud",
-                    note: "Cloud-synced daily briefing",
-                  },
-                  null,
-                  2,
-                ),
-              },
-            ],
-          };
+          return envelope(
+            { date, briefings },
+            { source: "cloud", note: "Cloud-synced daily briefing", quality: "high" },
+          );
         }
       } catch {
         // fall through to local
@@ -397,22 +576,48 @@ const LOCAL_HANDLERS: Record<
       [todayMs, limit],
     );
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              date,
-              recentActivity: recentNodes,
-              note: "Local AKG mode — briefing based on workspace activity",
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    const nodes = recentNodes.map(toBriefNode);
+    const stats = s.getStats();
+    const summary = proseSummary(nodes, stats);
+    const actions = actionItems(nodes, stats);
+
+    return envelope(
+      { date, recentActivity: nodes, summary, action_items: actions },
+      { note: "Local AKG mode — briefing based on workspace activity", quality: "high" },
+    );
+  },
+
+  get_context_digest: async (args) => {
+    const limit = args?.limit || 8;
+    const payload = buildDigestPayload(limit);
+    persistDigest(payload);
+    return envelope(payload, {
+      note: "Session-start context digest",
+      quality: getStorage().getStats().chunks > 0 ? "high" : "low",
+    });
+  },
+
+  get_workspace_updates: async (args) => {
+    const s = getStorage();
+    const limit = args?.limit || 20;
+    const sinceMs = args?.since ? new Date(args.since).getTime() : Date.now() - DAY_MS;
+    if (!Number.isFinite(sinceMs)) {
+      return { content: [{ type: "text", text: "since must be an ISO timestamp" }], isError: true };
+    }
+
+    const rows = s.runQuery(
+      "SELECT id, label, type, content, updated_at FROM nodes WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT ?",
+      [sinceMs, limit + 1],
+    );
+    const nodes = rows.map(toBriefNode);
+    const hasMore = nodes.length > limit;
+    const page = hasMore ? nodes.slice(0, limit) : nodes;
+    const cursor = page.length ? iso(page[0].updated_at) : undefined;
+
+    return envelope(
+      { since: iso(sinceMs), updates: page, next_cursor: cursor, has_more: hasMore },
+      { note: "Delta of knowledge-graph changes since the given time" },
+    );
   },
 
   find_related_knowledge: async (args) => {
@@ -428,18 +633,13 @@ const LOCAL_HANDLERS: Record<
     }));
 
     const semanticAvailable = await getQuery().semanticAvailable();
-    const note = semanticAvailable
-      ? undefined
-      : "Semantic search unavailable — results are keyword (FTS) matches only.";
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ term, results: related.slice(0, limit), note }, null, 2),
-        },
-      ],
-    };
+    return envelope(
+      { term, results: related.slice(0, limit) },
+      {
+        note: semanticAvailable ? undefined : "Semantic search unavailable — results are keyword (FTS) matches only.",
+        quality: semanticAvailable ? "high" : "low",
+      },
+    );
   },
 
   trace_decision: async (args) => {
@@ -449,40 +649,27 @@ const LOCAL_HANDLERS: Record<
 
     const node = s.getNode(decisionId);
     if (!node) {
-      return {
-        content: [{ type: "text", text: `Decision "${decisionId}" not found in local AKG` }],
-      };
+      return envelope({ decision: null }, { note: `Decision "${decisionId}" not found in local AKG` });
     }
 
     const neighbors = s.getNeighbors(decisionId);
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              decision: node,
-              relationships: neighbors.map((n) => ({
-                direction: n.direction === "out" ? "depends_on" : "depended_by",
-                node: n.node.label,
-                nodeId: n.node.id,
-                relation: n.relation,
-              })),
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    return envelope(
+      {
+        decision: node,
+        relationships: neighbors.map((n) => ({
+          direction: n.direction === "out" ? "depends_on" : "depended_by",
+          node: n.node.label,
+          nodeId: n.node.id,
+          relation: n.relation,
+        })),
+      },
+      { note: "Local knowledge-graph trace", quality: "high" },
+    );
   },
 };
 
-export async function handleToolCall(
-  name: string,
-  args: any,
-): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+export async function handleToolCall(name: string, args: any): Promise<ToolResult> {
   try {
     const handler = LOCAL_HANDLERS[name];
     if (handler) {
@@ -501,62 +688,63 @@ export async function handleToolCall(
   }
 }
 
+// Resource handlers mirror the tool shapes (D3: one canonical shape per entity).
 export async function handleReadResource(
   uri: string,
 ): Promise<{ contents: Array<{ uri: string; mimeType: string; text: string }> }> {
+  const toContents = (payload: unknown): { contents: Array<{ uri: string; mimeType: string; text: string }> } => ({
+    contents: [{ uri, mimeType: "application/json", text: JSON.stringify(payload, null, 2) }],
+  });
+
   try {
     const s = getStorage();
+    const stats = s.getStats();
+
+    if (uri === "astrivya://briefing/today") {
+      const recentNodes = s.runQuery(
+        "SELECT id, label, type, content, updated_at FROM nodes ORDER BY updated_at DESC LIMIT 10",
+      );
+      const nodes = recentNodes.map(toBriefNode);
+      const summary = proseSummary(nodes, stats);
+      return toContents(
+        envelopePayload(
+          {
+            date: new Date().toISOString().split("T")[0],
+            recentActivity: nodes,
+            summary,
+            action_items: actionItems(nodes, stats),
+          },
+          { note: "Today's context briefing (local AKG)" },
+        ),
+      );
+    }
 
     if (uri.startsWith("astrivya://team/")) {
-      const stats = s.getStats();
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: "application/json",
-            text: JSON.stringify({ workspace: workspacePath, ...stats }, null, 2),
-          },
-        ],
-      };
+      const recent = s.runQuery(
+        "SELECT id, label, type, updated_at FROM nodes WHERE type IN ('adr','agent_action') ORDER BY updated_at DESC LIMIT 10",
+      );
+      return toContents(
+        envelopePayload(
+          { workspace: workspacePath, stats, recentDecisions: recent },
+          { note: "Active team knowledge (local AKG)" },
+        ),
+      );
     }
 
     if (uri.startsWith("astrivya://user/")) {
-      const stats = s.getStats();
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: "application/json",
-            text: JSON.stringify({ workspace: workspacePath, ...stats }, null, 2),
-          },
-        ],
-      };
-    }
-
-    if (uri === "astrivya://briefing/today") {
-      const recentNodes = s.runQuery("SELECT id, label, type, updated_at FROM nodes ORDER BY updated_at DESC LIMIT 10");
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: "application/json",
-            text: JSON.stringify({ recentActivity: recentNodes }, null, 2),
-          },
-        ],
-      };
+      const memories = s.runQuery(
+        "SELECT id, label, type, updated_at FROM nodes WHERE type = 'agent_action' ORDER BY updated_at DESC LIMIT 10",
+      );
+      return toContents(
+        envelopePayload({ workspace: workspacePath, stats, memories }, { note: "Personal memories (local AKG)" }),
+      );
     }
 
     if (uri === "astrivya://org/knowledge-graph") {
       const nodes = s.runQuery("SELECT id, label, type FROM nodes LIMIT 50");
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: "application/json",
-            text: JSON.stringify({ nodes, workspace: workspacePath }, null, 2),
-          },
-        ],
-      };
+      return toContents(
+        envelopePayload({ workspace: workspacePath, nodes }, { note: "Organization knowledge graph (local AKG)" }),
+      );
     }
 
     throw new Error(`Unsupported resource URI: ${uri}`);

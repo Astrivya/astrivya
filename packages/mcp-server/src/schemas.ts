@@ -61,6 +61,20 @@ export const CORE_TOOL_DEFINITIONS = [
     inputSchema: { type: "object", properties: {} },
   },
   {
+    name: "check_credits",
+    description:
+      "Check the current user's live credit balance, lifetime usage, and recent transactions from the cloud. Fails gracefully when the cloud is unreachable.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        transactions: {
+          type: "number",
+          description: "Optional number of recent transactions to include (default: 0)",
+        },
+      },
+    },
+  },
+  {
     name: "log_decision",
     description: "Record a code design or architectural decision in the team dashboard.",
     inputSchema: {
@@ -156,11 +170,93 @@ export const CORE_TOOL_DEFINITIONS = [
       required: ["decision_id"],
     },
   },
+  {
+    name: "get_context_digest",
+    description:
+      "Compact pre-digested context for session start: recent activity, active areas, and action items in prose.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Number of recent items to consider (default: 8)" },
+      },
+    },
+  },
+  {
+    name: "get_workspace_updates",
+    description:
+      "Return knowledge-graph changes since a timestamp (delta). Use to catch up mid-session or poll for newly indexed files.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        since: {
+          type: "string",
+          description: "ISO timestamp to diff from (default: 24h ago)",
+        },
+        limit: { type: "number", description: "Max items to return (default: 20)" },
+      },
+    },
+  },
 ];
+
+/**
+ * Cost / quality / "when to use" hints per tool (D1, D4). Surfaced in the tool
+ * description so a caller can decide cheaply whether a call is worth making.
+ */
+const TOOL_META: Record<
+  string,
+  { when: string; cost: "cheap" | "moderate" | "expensive"; quality: "high" | "medium" | "low" }
+> = {
+  search_memories: {
+    when: "Before answering a question about past work, decisions, or project context",
+    cost: "cheap",
+    quality: "high",
+  },
+  get_person_context: {
+    when: "To orient at session start or when asked about your own setup/work",
+    cost: "cheap",
+    quality: "medium",
+  },
+  get_team_context: { when: "To see what teammates have worked on or decided", cost: "moderate", quality: "medium" },
+  get_team_members: { when: "To list who is on the team", cost: "moderate", quality: "medium" },
+  get_team_analytics: { when: "To see team activity metrics", cost: "moderate", quality: "medium" },
+  list_notifications: { when: "To check for unread alerts", cost: "moderate", quality: "medium" },
+  mark_notification_read: { when: "After acting on a notification", cost: "cheap", quality: "high" },
+  get_expertise_profile: { when: "To find who/what covers an area", cost: "cheap", quality: "medium" },
+  log_decision: {
+    when: "When you make an architectural or design choice worth remembering",
+    cost: "cheap",
+    quality: "high",
+  },
+  log_memory: { when: "When you learn a fact or preference worth persisting", cost: "cheap", quality: "high" },
+  search_connectors: {
+    when: "To pull docs from GitHub/Notion/Jira/Slack integrations",
+    cost: "moderate",
+    quality: "medium",
+  },
+  get_mcp_status: { when: "To diagnose whether the MCP server is healthy", cost: "cheap", quality: "high" },
+  get_daily_briefing: { when: "At session start to see today's activity summary", cost: "cheap", quality: "high" },
+  find_related_knowledge: { when: "To discover related concepts for a term", cost: "cheap", quality: "medium" },
+  trace_decision: {
+    when: "To see what a decision depends on and what depends on it",
+    cost: "cheap",
+    quality: "medium",
+  },
+  get_context_digest: { when: "Session start — compact prose digest (<1.5k tokens)", cost: "cheap", quality: "high" },
+  get_workspace_updates: { when: "Mid-session catch-up or delta polling", cost: "cheap", quality: "medium" },
+};
+
+function enrichDescription(name: string, description: string): string {
+  const meta = TOOL_META[name];
+  if (!meta) return description;
+  return `${description} When to use: ${meta.when}. Cost: ${meta.cost} (local). Quality: ${meta.quality}.`;
+}
 
 export function buildToolList(pluginTools: ToolPlugin[]): any[] {
   return [
-    ...CORE_TOOL_DEFINITIONS,
+    ...CORE_TOOL_DEFINITIONS.map((t) => ({
+      ...t,
+      description: enrichDescription(t.name, t.description),
+    })),
     ...pluginTools.map((p) => ({
       name: p.name,
       description: p.description,

@@ -4,15 +4,31 @@ import { AkgQuery, AkgStorage, GraphTraversal, ImpactAnalyzer } from "@astrivya/
 import { AkgEmbedder, AkgIndexer } from "@astrivya/akg-indexer";
 import type { Command } from "commander";
 import envPaths from "env-paths";
-import { color, error, getErrorMessage, startSpinner, success } from "../lib/output";
+import { color, error, getErrorMessage, startSpinner, success, warn } from "../lib/output";
+
+/** Generate embeddings for all un-embedded chunks. Returns null if unavailable (FTS-only fallback). */
+async function embedChunks(
+  storage: AkgStorage,
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ embedded: number; total: number } | null> {
+  try {
+    const embedder = new AkgEmbedder();
+    const pathsFromEnv = envPaths("astrivya", { suffix: "" });
+    const modelsDir = path.join(pathsFromEnv.config, "models");
+    return await embedder.embedAllChunks(storage, modelsDir, onProgress);
+  } catch (err: unknown) {
+    warn(`Embeddings skipped: ${getErrorMessage(err)} (keyword search still works)`);
+    return null;
+  }
+}
 
 export function registerAkg(program: Command): void {
   const akg = program.command("akg").description("Manage local repository knowledge graph (AKG)");
 
   akg
     .command("init [workspacePath]")
-    .description("Initialize and index workspace files into local akg.db")
-    .option("--embed", "Generate vector embeddings locally using ONNX model")
+    .description("Initialize and index workspace files (code, docs, ADRs, agent logs) into local akg.db")
+    .option("--no-embed", "Skip generating vector embeddings locally (ONNX)")
     .action(async (workspacePath, options) => {
       const targetPath = workspacePath ? path.resolve(workspacePath) : process.cwd();
       const spinner = startSpinner("Initializing local AKG database...");
@@ -26,23 +42,19 @@ export function registerAkg(program: Command): void {
           (spinner as any).text = msg;
         });
 
-        if (options.embed) {
-          (spinner as any).text = "Loading ONNX model and generating embeddings...";
-          const embedder = new AkgEmbedder();
-          const pathsFromEnv = envPaths("astrivya", { suffix: "" });
-          const modelsDir = path.join(pathsFromEnv.config, "models");
-
-          const embResult = await embedder.embedAllChunks(storage, modelsDir, (done, total) => {
+        let embResult: { embedded: number; total: number } | null = null;
+        if (options.embed !== false) {
+          (spinner as any).text = "Generating embeddings (ONNX)...";
+          embResult = await embedChunks(storage, (done, total) => {
             (spinner as any).text = `Embedding chunks... ${done}/${total} (${Math.round((done / total) * 100)}%)`;
           });
-          spinner.succeed("AKG database initialized and embedded successfully!");
-          success(`Indexed ${result.filesIndexed} files. Embedded ${embResult.embedded}/${embResult.total} chunks.`);
-        } else {
-          spinner.succeed("AKG database initialized successfully!");
-          success(
-            `Indexed ${result.filesIndexed} files -> ${result.nodesCreated} nodes, ${result.edgesCreated} edges.`,
-          );
         }
+
+        spinner.succeed("AKG database initialized successfully!");
+        const embedMsg = embResult ? ` Embedded ${embResult.embedded}/${embResult.total} chunks.` : "";
+        success(
+          `Indexed ${result.filesIndexed} files -> ${result.nodesCreated} nodes, ${result.edgesCreated} edges, ${result.chunks} chunks.${embedMsg}`,
+        );
       } catch (err: unknown) {
         spinner.fail("Failed to initialize AKG database");
         error(getErrorMessage(err));
@@ -124,8 +136,8 @@ export function registerAkg(program: Command): void {
 
   akg
     .command("reindex")
-    .description("Incremental index updates for changed files")
-    .option("--embed", "Generate vector embeddings locally using ONNX model")
+    .description("Incremental index updates for changed files (with embeddings)")
+    .option("--no-embed", "Skip generating vector embeddings locally (ONNX)")
     .action(async (options) => {
       const targetPath = process.cwd();
       const spinner = startSpinner("Checking for changes...");
@@ -138,21 +150,19 @@ export function registerAkg(program: Command): void {
           (spinner as any).text = msg;
         });
 
-        if (options.embed) {
-          (spinner as any).text = "Loading ONNX model and generating embeddings...";
-          const embedder = new AkgEmbedder();
-          const pathsFromEnv = envPaths("astrivya", { suffix: "" });
-          const modelsDir = path.join(pathsFromEnv.config, "models");
-
-          const embResult = await embedder.embedAllChunks(storage, modelsDir, (done, total) => {
+        let embResult: { embedded: number; total: number } | null = null;
+        if (options.embed !== false) {
+          (spinner as any).text = "Generating embeddings (ONNX)...";
+          embResult = await embedChunks(storage, (done, total) => {
             (spinner as any).text = `Embedding chunks... ${done}/${total} (${Math.round((done / total) * 100)}%)`;
           });
-          spinner.succeed("AKG database reindexed and embedded successfully!");
-          success(`Synced files. Embedded ${embResult.embedded}/${embResult.total} chunks.`);
-        } else {
-          spinner.succeed("AKG database reindexed!");
-          success(`Synced files. Current state: ${result.nodesCreated} nodes, ${result.edgesCreated} edges.`);
         }
+
+        spinner.succeed("AKG database reindexed!");
+        const embedMsg = embResult ? ` Embedded ${embResult.embedded}/${embResult.total} chunks.` : "";
+        success(
+          `Indexed ${result.filesIndexed} files -> ${result.nodesCreated} nodes, ${result.edgesCreated} edges, ${result.chunks} chunks.${embedMsg}`,
+        );
       } catch (err: unknown) {
         spinner.fail("Failed to reindex AKG");
         error(getErrorMessage(err));

@@ -9,14 +9,21 @@ export class AkgEmbedder {
   async init(modelsDir: string): Promise<void> {
     try {
       // Lazy load peer dependency
-      const { pipeline } = require("@xenova/transformers");
-      const modelFile = path.join(modelsDir, "model.onnx");
+      const { pipeline, env } = require("@xenova/transformers");
+      const modelFile = path.join(modelsDir, "onnx", "model.onnx");
       if (!fs.existsSync(modelFile)) {
         throw new Error(`Model file not found at ${modelFile}. Run "astrivya local setup" to download it.`);
       }
 
-      this.pipelineInstance = await pipeline("feature-extraction", modelsDir, {
-        model_file_name: "model.onnx",
+      // Point the transformers.js local-model root at the parent of modelsDir,
+      // then load by folder name. Passing the absolute dir as the model id
+      // makes transformers.js nest it under its own localModelPath.
+      env.localModelPath = path.join(modelsDir, "..") + path.sep;
+      env.allowRemoteModels = false;
+
+      this.pipelineInstance = await pipeline("feature-extraction", path.basename(modelsDir), {
+        model_file_name: "model",
+        quantized: false,
         local_files_only: true,
       });
     } catch (err: unknown) {
