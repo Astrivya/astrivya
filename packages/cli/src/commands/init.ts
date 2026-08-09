@@ -58,12 +58,11 @@ Press Ctrl+C at any time to skip a step.
         // Step 2: Verify
         console.log("\nStep 2/3: Verify your setup");
         const skipDoctor = !!(options.yes && options.skipDoctor);
-        const wantDoctor =
-          skipDoctor
-            ? false
-            : nonInteractive
-              ? true
-              : (await prompt("Run a health check? (Y/n): ")).toLowerCase() !== "n";
+        const wantDoctor = skipDoctor
+          ? false
+          : nonInteractive
+            ? true
+            : (await prompt("Run a health check? (Y/n): ")).toLowerCase() !== "n";
         if (wantDoctor) {
           if (await runCli("doctor")) {
             console.log("  + Health check complete");

@@ -108,7 +108,10 @@ export function readJournal(workspace: string, limit = 100): JournalEvent[] {
   try {
     const file = journalPath(workspace);
     if (!fs.existsSync(file)) return [];
-    const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.trim().length > 0);
+    const lines = fs
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0);
     const events: JournalEvent[] = [];
     for (const line of lines.slice(-limit)) {
       try {

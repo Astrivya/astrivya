@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import { getConfigPath } from "../lib/config";
 import { loadConfig, saveConfig } from "../lib/compat";
+import { getConfigPath } from "../lib/config";
 import { color, json as printJson, table } from "../lib/output";
 
 function printConfigGuide(path: string, config: string) {

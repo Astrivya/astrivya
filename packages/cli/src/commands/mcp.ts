@@ -1,13 +1,8 @@
-import type { Command } from "commander";
 import { journalPath, readJournal } from "@astrivya/mcp-server";
+import type { Command } from "commander";
 import { getBaseUrl } from "../lib/compat";
 import { color, getErrorMessage, json as printJson } from "../lib/output";
-import {
-  ALL_TOOLS,
-  buildMcpServiceEntry,
-  buildOpenCodeEntry,
-  type ToolDetector,
-} from "./setup";
+import { ALL_TOOLS, type ToolDetector, buildMcpServiceEntry, buildOpenCodeEntry } from "./setup";
 
 export interface McpSummary {
   hasJournal: boolean;
@@ -56,7 +51,7 @@ function formatDate(iso: string): string {
 }
 
 function renderSummary(s: McpSummary): void {
-  console.log(`\n  Astrivya MCP Server — this workspace`);
+  console.log("\n  Astrivya MCP Server — this workspace");
   console.log(`  ${"─".repeat(40)}`);
 
   if (!s.hasJournal) {
@@ -100,16 +95,16 @@ function uninstallToolEntry(tool: ToolDetector): boolean {
   let removed = false;
   if (tool.name === "OpenCode") {
     const mcp = (existing as any).mcp as Record<string, unknown> | undefined;
-    if (mcp && mcp.astrivya) {
-      delete mcp.astrivya;
-      if (Object.keys(mcp).length === 0) delete (existing as any).mcp;
+    if (mcp?.astrivya) {
+      Reflect.deleteProperty(mcp, "astrivya");
+      if (Object.keys(mcp).length === 0) Reflect.deleteProperty(existing as any, "mcp");
       removed = true;
     }
   } else {
     const servers = (existing as any).mcpServers as Record<string, unknown> | undefined;
-    if (servers && servers.astrivya) {
-      delete servers.astrivya;
-      if (Object.keys(servers).length === 0) delete (existing as any).mcpServers;
+    if (servers?.astrivya) {
+      Reflect.deleteProperty(servers, "astrivya");
+      if (Object.keys(servers).length === 0) Reflect.deleteProperty(existing as any, "mcpServers");
       removed = true;
     }
   }

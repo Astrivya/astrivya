@@ -2,12 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AkgStorage } from "@astrivya/akg-core";
 import type { Command } from "commander";
-import { getConfigPath } from "../lib/config";
 import { apiCall, getBaseUrl, getToken, loadConfig } from "../lib/compat";
+import { getConfigPath } from "../lib/config";
 import { json as printJson } from "../lib/output";
 import { CURRENT_VERSION } from "../lib/version";
-import { ALL_TOOLS, buildMcpServiceEntry, buildOpenCodeEntry } from "./setup";
 import { summarizeMcpJournal } from "./mcp";
+import { ALL_TOOLS, buildMcpServiceEntry, buildOpenCodeEntry } from "./setup";
 
 interface Check {
   label: string;

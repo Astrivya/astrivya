@@ -16,8 +16,7 @@ export const API_PATHS = {
   AKG_SYNC_PUSH: "/api/akg/sync/push",
   AKG_SYNC_SEARCH: "/api/akg/sync/search",
   CREDIT_BALANCE: "/api/credits/balance",
-  CREDIT_TRANSACTIONS: (limit?: number) =>
-    `/api/credits/transactions${limit ? `?limit=${limit}` : ""}`,
+  CREDIT_TRANSACTIONS: (limit?: number) => `/api/credits/transactions${limit ? `?limit=${limit}` : ""}`,
 } as const;
 
 export function getConfig() {

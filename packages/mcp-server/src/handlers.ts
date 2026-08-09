@@ -402,9 +402,7 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
     try {
       const balance = await syncCall(API_PATHS.CREDIT_BALANCE, "GET");
       const limit = Math.min(Math.max(Number(args?.transactions) || 0, 0), 20);
-      const txs = limit > 0
-        ? await syncCall(API_PATHS.CREDIT_TRANSACTIONS(limit), "GET")
-        : [];
+      const txs = limit > 0 ? await syncCall(API_PATHS.CREDIT_TRANSACTIONS(limit), "GET") : [];
       return envelope(
         {
           balance: Number(balance?.balance ?? 0),
@@ -417,10 +415,7 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
       );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      return envelope(
-        { error: message },
-        { source: "cloud", note: "Failed to fetch credit balance" },
-      );
+      return envelope({ error: message }, { source: "cloud", note: "Failed to fetch credit balance" });
     }
   },
 

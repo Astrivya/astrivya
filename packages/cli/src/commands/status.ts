@@ -225,7 +225,9 @@ export function registerStatus(program: Command): void {
         subheader("MCP Server");
         if (mcpSummary.hasJournal) {
           console.log(`  Sessions:     ${color.bold(String(mcpSummary.sessions))}`);
-          console.log(`  Tool calls:   ${color.bold(String(mcpSummary.toolCalls))}${mcpSummary.toolErrors > 0 ? color.yellow(` (${mcpSummary.toolErrors} errors)`) : ""}`);
+          console.log(
+            `  Tool calls:   ${color.bold(String(mcpSummary.toolCalls))}${mcpSummary.toolErrors > 0 ? color.yellow(` (${mcpSummary.toolErrors} errors)`) : ""}`,
+          );
           if (mcpSummary.lastActivity) {
             console.log(`  Last activity: ${color.dim(new Date(mcpSummary.lastActivity).toLocaleString())}`);
           }
