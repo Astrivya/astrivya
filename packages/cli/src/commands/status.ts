@@ -44,6 +44,7 @@ export function registerStatus(program: Command): void {
         let orgData: any = null;
         let briefings: any[] = [];
         let recentDecisions: any[] = [];
+        let creditBalance: any = null;
 
         if (token) {
           try {
@@ -71,6 +72,12 @@ export function registerStatus(program: Command): void {
           } catch {
             // decisions may not be available
           }
+
+          try {
+            creditBalance = await apiCall("/api/credits/balance", "GET");
+          } catch {
+            // credits may not be available
+          }
         }
 
         spinner.stop();
@@ -96,6 +103,7 @@ export function registerStatus(program: Command): void {
             }),
           );
           console.log(JSON.stringify({ type: "organization", ...orgData }));
+          console.log(JSON.stringify({ type: "credits", ...creditBalance }));
           console.log(JSON.stringify({ type: "mcp", ...mcpSummary }));
           for (const b of briefings) {
             console.log(JSON.stringify({ type: "briefing", ...b }));
@@ -122,6 +130,7 @@ export function registerStatus(program: Command): void {
             },
             mcp: mcpSummary,
             organization: orgData,
+            credits: creditBalance,
             recentBriefings: briefings,
             recentDecisions,
           });
@@ -177,6 +186,25 @@ export function registerStatus(program: Command): void {
         console.log(`  API:          ${color.dim(getBaseUrl())}`);
         console.log(`  Config:       ${color.dim(getConfigPath("config.json"))}`);
         console.log();
+
+        // Credits
+        if (creditBalance) {
+          subheader("Credits");
+          const bal = Number(creditBalance.balance ?? 0);
+          const consumed = Number(creditBalance.lifetime_consumed ?? 0);
+          const purchased = Number(creditBalance.lifetime_purchased ?? 0);
+          const pctColor = bal <= 10 ? color.red : bal <= 50 ? color.yellow : color.green;
+          console.log(`  Balance:      ${pctColor(`${bal} credits`)}${bal <= 10 ? color.yellow(" \u26A0 Low") : ""}`);
+          if (consumed > 0) console.log(`  Used:         ${consumed} credits lifetime`);
+          if (purchased > 0) console.log(`  Purchased:    ${purchased} credits lifetime`);
+          if (creditBalance.last_monthly_refill_at) {
+            console.log(
+              `  Refill:       ${color.dim(new Date(creditBalance.last_monthly_refill_at).toLocaleDateString())}`,
+            );
+          }
+          console.log(`  ${color.dim("Details:")} ${color.cyan("astrivya credits")}`);
+          console.log();
+        }
 
         // Local AI
         subheader("Local AI");
