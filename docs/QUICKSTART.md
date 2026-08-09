@@ -111,8 +111,20 @@ npm install -g @astrivya/cli
 
 astrivya init        # Initialize workspace
 astrivya akg init    # Create AKG database
-astrivya status      # See graph stats
+astrivya status      # See graph stats + MCP session summary
+astrivya mcp         # See what the MCP server has been doing in this workspace
 astrivya akg query "auth"  # Search the graph
+```
+
+## See your MCP sessions
+
+Every MCP server run in a workspace journals its events to
+`.astrivya/mcp/events.ndjson`. Inspect it anytime:
+
+```sh
+astrivya mcp        # sessions, tool calls, errors
+astrivya mcp log    # recent server start/stop, session, and tool events
+astrivya mcp --json # machine-readable summary
 ```
 
 ## What's next?

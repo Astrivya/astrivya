@@ -115,6 +115,12 @@ export const CORE_TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "get_mcp_status",
+    description:
+      "Retrieve the MCP server's own status — uptime, session count, tool call counters, and recent activity journal.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "get_daily_briefing",
     description: "Fetch the developer's latest daily work context briefings.",
     inputSchema: {

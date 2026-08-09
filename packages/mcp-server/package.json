@@ -23,6 +23,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@astrivya/akg-indexer": "^0.1.0",
     "@astrivya/plugin-api": "^0.1.0",
     "@astrivya/plugin-runtime": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.16.0",

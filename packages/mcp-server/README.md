@@ -1,6 +1,6 @@
 # @astrivya/mcp-server
 
-**Model Context Protocol server** for the Astrivya Knowledge Graph. Provides 14 tools that any MCP-compatible client (Claude Desktop, Cursor, Cline, VS Code with Continue, etc.) can use to read, write, and search your local knowledge graph.
+**Model Context Protocol server** for the Astrivya Knowledge Graph. Provides 15 tools that any MCP-compatible client (Claude Desktop, Cursor, Cline, VS Code with Continue, etc.) can use to read, write, and search your local knowledge graph.
 
 ```sh
 npm install -g @astrivya/mcp-server
@@ -53,6 +53,7 @@ Add to `~/.continue/config.json`:
 | `search_memories` | `query`, `limit?` | Search the knowledge graph with semantic ranking |
 | `get_team_context` | `team_id?` | Workspace context (nodes, edges, chunks stats) |
 | `get_person_context` | — | Current workspace status |
+| `get_mcp_status` | — | MCP server health: uptime, sessions, tool call counters, recent events |
 | `log_decision` | `title`, `content`, `file_context?` | Record a design decision |
 | `log_memory` | `content`, `type?`, `visibility?` | Store a custom fact or insight |
 | `search_connectors` | `query`, `limit?` | Search indexed content chunks |

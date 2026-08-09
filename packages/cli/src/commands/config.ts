@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { getConfigPath } from "../lib/config";
 import { loadConfig, saveConfig } from "../lib/compat";
 import { color, json as printJson, table } from "../lib/output";
 
@@ -9,6 +10,33 @@ function printConfigGuide(path: string, config: string) {
 
 export function registerConfig(program: Command): void {
   const cfg = program.command("config").description("Manage CLI settings and print integration configs");
+
+  cfg
+    .command("show")
+    .description("Show the resolved config file path (source of truth) and values")
+    .option("--json", "Output raw JSON")
+    .action((options) => {
+      const resolvedPath = getConfigPath("config.json");
+      const config = loadConfig();
+      if (options.json) {
+        printJson({ path: resolvedPath, ...config });
+        return;
+      }
+      console.log(`\n${color.bold("Configuration:")}`);
+      console.log(`  File: ${color.dim(resolvedPath)}`);
+      const entries = Object.entries(config).filter(([_, v]) => v !== undefined);
+      if (entries.length === 0) {
+        console.log(`  ${color.dim("No configuration set.")}`);
+        console.log();
+        return;
+      }
+      console.log();
+      table(
+        ["Key", "Value"],
+        entries.map(([k, v]) => [k, String(v)]),
+      );
+      console.log();
+    });
 
   cfg
     .command("list")

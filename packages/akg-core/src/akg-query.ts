@@ -3,6 +3,8 @@ import envPaths from "env-paths";
 import type { AkgStorage } from "./akg-storage";
 import type { QueryIntent, RetrievalResult } from "./akg-types";
 
+let _embedderWarned = false;
+
 export class AkgQuery {
   private embedder: any = null;
 
@@ -23,10 +25,28 @@ export class AkgQuery {
       await emb.init(modelsDir);
       this.embedder = emb;
       return this.embedder;
-    } catch {
+    } catch (err: unknown) {
+      // The most common cause of a dead semantic search is a standalone
+      // install that does not ship @astrivya/akg-indexer. Surface it once so
+      // an empty result is not mistaken for "no data".
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/Cannot find module/.test(msg) && !_embedderWarned) {
+        _embedderWarned = true;
+        console.error(
+          "[Astrivya] Semantic search unavailable: @astrivya/akg-indexer is not installed here. Keyword (FTS) search still works. Install it with: npm i -g @astrivya/akg-indexer",
+        );
+      } else if (msg && !_embedderWarned) {
+        _embedderWarned = true;
+        console.error(`[Astrivya] Semantic search unavailable: ${msg} — falling back to keyword (FTS) search.`);
+      }
       this.embedder = null;
       return null;
     }
+  }
+
+  /** Whether the semantic embedder is available in this runtime. */
+  async semanticAvailable(): Promise<boolean> {
+    return !!(await this.getEmbedder());
   }
 
   async retrieve(query: string, limit = 8): Promise<RetrievalResult[]> {

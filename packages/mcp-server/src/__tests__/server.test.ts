@@ -117,9 +117,11 @@ describe("MCP server handlers — tools", () => {
     const result = await handleToolCall("search_memories", { query: "dark mode", limit: 5 });
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0].text);
-    expect(Array.isArray(data)).toBe(true);
-    // FTS/search results depend on embedder availability
-    // In CI/test environment without a model, this may be empty
+    expect(Array.isArray(data.results)).toBe(true);
+    // Envelope is self-describing: semantic availability is surfaced via `note`
+    // so an empty array is not misread as "no data".
+    expect(data.note).toBeDefined();
+    expect(data.note).toContain("keyword (FTS)");
   });
 
   it("get_daily_briefing returns recent activity", async () => {

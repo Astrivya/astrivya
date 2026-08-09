@@ -1,7 +1,13 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { AkgStorage } from "@astrivya/akg-core";
 import type { Command } from "commander";
+import { getConfigPath } from "../lib/config";
 import { apiCall, getBaseUrl, getToken, loadConfig } from "../lib/compat";
 import { json as printJson } from "../lib/output";
+import { CURRENT_VERSION } from "../lib/version";
 import { ALL_TOOLS, buildMcpServiceEntry, buildOpenCodeEntry } from "./setup";
+import { summarizeMcpJournal } from "./mcp";
 
 interface Check {
   label: string;
@@ -48,15 +54,15 @@ export function registerDoctor(program: Command): void {
         } catch {
           authChecks.push({
             label: "Token valid",
-            status: "fail",
-            detail: "Token rejected by server. Run `astrivya auth login`.",
+            status: "warn",
+            detail: "Cloud unavailable — local mode works. Run `astrivya auth login` to enable cloud.",
           });
         }
       } else {
         authChecks.push({
           label: "Authenticated",
-          status: "fail",
-          detail: "No token found. Run `astrivya auth login`.",
+          status: "warn",
+          detail: "No token found — local mode works. Run `astrivya auth login` for cloud features.",
         });
       }
       if (authChecks.length > 0) sections.push({ title: "Authentication", checks: authChecks });
@@ -80,40 +86,51 @@ export function registerDoctor(program: Command): void {
         } else {
           backendChecks.push({
             label: "API reachable",
-            status: "fail",
-            detail: `${baseUrl} (HTTP ${res.status})`,
+            status: "warn",
+            detail: `Cloud API unreachable at ${baseUrl} — local features unaffected`,
           });
         }
       } catch {
         backendChecks.push({
           label: "API reachable",
-          status: "fail",
-          detail: `Cannot connect to ${baseUrl}`,
+          status: "warn",
+          detail: `Cannot connect to ${baseUrl} — local features unaffected`,
         });
       }
       if (backendChecks.length > 0) sections.push({ title: "Backend", checks: backendChecks });
 
       // ── MCP Server ──────────────────────────────────────
       const mcpChecks: Check[] = [];
+      mcpChecks.push({ label: `@astrivya/cli v${CURRENT_VERSION}`, status: "pass" });
+
+      // Check the local knowledge graph (the real backing of local search)
+      let localNodes = 0;
       try {
-        const pkgVersion = process.env.__PACKAGE_VERSION__ || "0.0.0";
-        mcpChecks.push({ label: `@astrivya/cli v${pkgVersion}`, status: "pass" });
+        const storage = new AkgStorage();
+        await storage.init(process.cwd());
+        localNodes = storage.getStats().nodes;
+        mcpChecks.push({
+          label: "Local knowledge graph",
+          status: localNodes > 0 ? "pass" : "warn",
+          detail: localNodes > 0 ? `${localNodes} nodes indexed` : "Not indexed yet — run `astrivya akg init`",
+        });
       } catch {
-        mcpChecks.push({ label: "Package version", status: "warn", detail: "Could not detect" });
+        mcpChecks.push({ label: "Local knowledge graph", status: "warn", detail: "Could not open akg.db" });
       }
 
-      // Check embeddings
-      try {
-        await apiCall("/api/memories/search", "POST", {
-          query: "health check test query",
-          limit: 1,
-        });
-        mcpChecks.push({ label: "Search working", status: "pass" });
-      } catch {
+      // Check the MCP session journal (written by the mcp-server)
+      const mcpSummary = summarizeMcpJournal(process.cwd());
+      if (mcpSummary.hasJournal) {
         mcpChecks.push({
-          label: "Search working",
-          status: "fail",
-          detail: "Memory search returned an error",
+          label: "MCP session journal",
+          status: "pass",
+          detail: `${mcpSummary.sessions} session(s), ${mcpSummary.toolCalls} tool call(s)`,
+        });
+      } else {
+        mcpChecks.push({
+          label: "MCP session journal",
+          status: "warn",
+          detail: "No MCP activity recorded yet — run an agent configured with Astrivya MCP",
         });
       }
       if (mcpChecks.length > 0) sections.push({ title: "MCP Server", checks: mcpChecks });
@@ -176,6 +193,20 @@ export function registerDoctor(program: Command): void {
         });
       if (config.baseUrl) configChecks.push({ label: "Base URL", status: "pass", detail: config.baseUrl });
       if (config.teamId) configChecks.push({ label: "Default team", status: "pass", detail: config.teamId });
+
+      // Single source of truth: surface the resolved config path and flag any
+      // stray duplicate (e.g. an older tool writing to `...\astrivya\config.json`
+      // while env-paths resolves config to `...\astrivya\Config\config.json`).
+      const resolvedPath = getConfigPath("config.json");
+      configChecks.push({ label: "Config file path", status: "pass", detail: resolvedPath });
+      const strayPath = path.join(path.dirname(resolvedPath), "..", "config.json");
+      if (fs.existsSync(strayPath)) {
+        configChecks.push({
+          label: "Stray config file",
+          status: "warn",
+          detail: `${strayPath} exists — values there are ignored; the file above is authoritative`,
+        });
+      }
 
       // BYOK provider check
       const openaiKey = process.env.ASTRIVYA_OPENAI_KEY;

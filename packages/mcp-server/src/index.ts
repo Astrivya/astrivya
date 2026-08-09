@@ -17,6 +17,14 @@ import { checkForUpdates, formatBanner, isOptedOut } from "./lib/update-notifier
 import { CURRENT_VERSION } from "./lib/version";
 import { loadToolPlugins } from "./plugin";
 import { RESOURCE_DEFINITIONS, buildToolList } from "./schemas";
+import {
+  getStatus,
+  initStatus,
+  recordServerStop,
+  recordSessionEnd,
+  recordSessionStart,
+  recordToolCall,
+} from "./status";
 
 function createServer() {
   const server = new Server(
@@ -32,8 +40,10 @@ function createServer() {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    let ok = false;
     try {
       const result = await handleToolCall(name, args);
+      ok = !(result as any)?.isError;
       return result;
     } catch (err: unknown) {
       console.error(`[Astrivya MCP] Tool execution error for ${name}:`, err);
@@ -41,6 +51,8 @@ function createServer() {
         content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
         isError: true,
       };
+    } finally {
+      recordToolCall(name, ok);
     }
   });
 
@@ -99,32 +111,66 @@ async function runStdioServer() {
   console.error("[Astrivya MCP Server] Starting up (stdio transport).");
   const byok = getByokProvider();
   if (byok) console.error(`[Astrivya MCP] BYOK provider: ${byok.name}`);
-  await initAkg();
+  const workspacePath = await initAkg();
   maybePrintUpdateBanner();
+
+  initStatus({ workspace: workspacePath, mode: "stdio", version: CURRENT_VERSION });
 
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  recordSessionStart();
   console.error("Astrivya MCP Server is listening on Standard I/O.");
+
+  const shutdown = (signal: string) => {
+    recordServerStop(signal);
+    void transport
+      .close()
+      .catch(() => {})
+      .finally(() => process.exit(0));
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 async function runHttpServer(port: number) {
   console.error(`[Astrivya MCP HTTP] Starting up on http://localhost:${port}/mcp`);
   const byok = getByokProvider();
   if (byok) console.error(`[Astrivya MCP] BYOK provider: ${byok.name}`);
-  await initAkg();
+  const workspacePath = await initAkg();
   maybePrintUpdateBanner();
+
+  initStatus({ workspace: workspacePath, mode: "http", version: CURRENT_VERSION });
 
   const server = createServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
+    onsessioninitialized: () => {
+      recordSessionStart();
+    },
+    onsessionclosed: () => {
+      recordSessionEnd();
+    },
   });
   await server.connect(transport);
 
   const app = http.createServer(async (req, res) => {
     if (req.url === "/health") {
+      const status = getStatus();
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok" }));
+      res.end(
+        JSON.stringify({
+          status: "ok",
+          version: CURRENT_VERSION,
+          uptimeMs: status.uptimeMs,
+          pid: process.pid,
+        }),
+      );
+      return;
+    }
+    if (req.url === "/status") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", ...getStatus() }));
       return;
     }
     try {
@@ -141,6 +187,18 @@ async function runHttpServer(port: number) {
   app.listen(port, () => {
     console.error(`[Astrivya MCP HTTP] Listening on http://localhost:${port}/mcp`);
   });
+
+  const shutdown = (signal: string) => {
+    recordServerStop(signal);
+    app.close(() => {
+      void transport
+        .close()
+        .catch(() => {})
+        .finally(() => process.exit(0));
+    });
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 async function main() {
@@ -163,3 +221,4 @@ if (require.main === module) {
 }
 
 export { runHttpServer, runStdioServer };
+export { getStatus, journalPath, readJournal } from "./status";

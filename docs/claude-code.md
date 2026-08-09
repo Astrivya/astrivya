@@ -25,4 +25,4 @@ Or add to `~/.claude/settings.json`:
 
 ## Available Tools
 
-Claude Code gains 14 tools — search memories, log decisions, trace decisions, query workspace context, and more. See the [MCP server README](../packages/mcp-server/README.md#tools) for the full list.
+Claude Code gains 15 tools — search memories, log decisions, trace decisions, check the MCP server's own status, query workspace context, and more. See the [MCP server README](../packages/mcp-server/README.md#tools) for the full list.

@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { AkgStorage } from "@astrivya/akg-core";
 import type { Command } from "commander";
 import { apiCall, getBaseUrl, getToken, loadConfig } from "../lib/compat";
+import { getConfigPath } from "../lib/config";
 import {
   color,
   divider,
@@ -12,6 +13,7 @@ import {
   startSpinner,
   subheader,
 } from "../lib/output";
+import { summarizeMcpJournal } from "./mcp";
 
 async function getLocalAkgStats(): Promise<{ nodes: number } | null> {
   try {
@@ -73,6 +75,8 @@ export function registerStatus(program: Command): void {
 
         spinner.stop();
 
+        const mcpSummary = summarizeMcpJournal(process.cwd());
+
         if (options.ndjson) {
           console.log(JSON.stringify({ type: "auth", authenticated: !!token, profile }));
           console.log(
@@ -92,6 +96,7 @@ export function registerStatus(program: Command): void {
             }),
           );
           console.log(JSON.stringify({ type: "organization", ...orgData }));
+          console.log(JSON.stringify({ type: "mcp", ...mcpSummary }));
           for (const b of briefings) {
             console.log(JSON.stringify({ type: "briefing", ...b }));
           }
@@ -115,6 +120,7 @@ export function registerStatus(program: Command): void {
               offlineMode: !!config.offlineMode,
               ollamaUrl: config.ollamaUrl || null,
             },
+            mcp: mcpSummary,
             organization: orgData,
             recentBriefings: briefings,
             recentDecisions,
@@ -169,7 +175,7 @@ export function registerStatus(program: Command): void {
         // Connection
         subheader("Connection");
         console.log(`  API:          ${color.dim(getBaseUrl())}`);
-        console.log(`  Config:       ${color.dim(process.env.ASTRIVYA_CONFIG_DIR || "~/.config/astrivya")}`);
+        console.log(`  Config:       ${color.dim(getConfigPath("config.json"))}`);
         console.log();
 
         // Local AI
@@ -184,6 +190,21 @@ export function registerStatus(program: Command): void {
         } else {
           console.log(`  Status:       ${color.dim("Not configured")}`);
           console.log(`  Run ${color.cyan("astrivya local setup")} to enable local AI.`);
+        }
+        console.log();
+
+        // MCP Server
+        subheader("MCP Server");
+        if (mcpSummary.hasJournal) {
+          console.log(`  Sessions:     ${color.bold(String(mcpSummary.sessions))}`);
+          console.log(`  Tool calls:   ${color.bold(String(mcpSummary.toolCalls))}${mcpSummary.toolErrors > 0 ? color.yellow(` (${mcpSummary.toolErrors} errors)`) : ""}`);
+          if (mcpSummary.lastActivity) {
+            console.log(`  Last activity: ${color.dim(new Date(mcpSummary.lastActivity).toLocaleString())}`);
+          }
+          console.log(`  ${color.dim("Details:")} ${color.cyan("astrivya mcp")}`);
+        } else {
+          console.log(`  ${color.dim("No activity journaled in this workspace yet.")}`);
+          console.log(`  Run ${color.cyan("astrivya setup --detect")} to configure agents.`);
         }
         console.log();
 

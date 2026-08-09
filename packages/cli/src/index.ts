@@ -10,6 +10,7 @@ import { registerDoctor } from "./commands/doctor";
 import { registerHooks } from "./commands/hooks";
 import { registerInit } from "./commands/init";
 import { registerLocal } from "./commands/local";
+import { registerMcp } from "./commands/mcp";
 import { registerMcpServer } from "./commands/mcp-server";
 import { registerPlugins } from "./commands/plugins";
 import { registerRuntime } from "./commands/runtime";
@@ -65,6 +66,7 @@ async function main() {
   registerAkg(program);
   registerConfig(program);
   registerStatus(program);
+  registerMcp(program);
   registerMcpServer(program);
   registerSetup(program);
   registerDoctor(program);

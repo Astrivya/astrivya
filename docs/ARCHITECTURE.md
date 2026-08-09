@@ -45,6 +45,6 @@ Extensible via plugin interface.
 |---------|---------------|
 | `akg-core` | Storage, query, traversal, impact analysis, sync/merge |
 | `akg-indexer` | File parsing, chunking, embedding |
-| `mcp-server` | Model Context Protocol interface (14 tools) |
+| `mcp-server` | Model Context Protocol interface (15 tools) |
 | `cli` | Terminal interface for graph management |
 | `atlas` | WebGL visualization (demo app) |

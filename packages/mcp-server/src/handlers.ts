@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { AkgQuery, type AkgStorage, GraphTraversal, ImpactAnalyzer } from "@astrivya/akg-core";
 import { API_PATHS, getConfig, syncCall } from "./api";
 import type { ToolPlugin } from "./plugin";
+import { getStatus, readJournal } from "./status";
 
 let storage: AkgStorage | null = null;
 let query: AkgQuery | null = null;
@@ -85,7 +86,33 @@ const LOCAL_HANDLERS: Record<
     const seen = new Set(results.map((r: any) => r.id));
     const merged = [...results, ...cloudNodes.filter((n) => !seen.has(n.id))].slice(0, limit);
 
-    return { content: [{ type: "text", text: JSON.stringify(merged, null, 2) }] };
+    const semanticAvailable = await getQuery().semanticAvailable();
+    const note = semanticAvailable
+      ? undefined
+      : "Local knowledge graph is empty or the semantic embedder is unavailable — results are keyword (FTS) matches only. Run `astrivya akg init --index` to index files.";
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({ results: merged, note }, null, 2) }],
+    };
+  },
+
+  get_mcp_status: async () => {
+    const status = getStatus();
+    const s = getStorage();
+    const stats = s.getStats();
+    const journal = readJournal(workspacePath, 20);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            { ...status, akg: { nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks }, recentEvents: journal },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
   },
 
   get_person_context: async () => {
@@ -321,7 +348,11 @@ const LOCAL_HANDLERS: Record<
     const q = args?.query || "";
     const limit = args?.limit || 10;
     const results = await getQuery().semanticSearch(q, limit);
-    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+    const semanticAvailable = await getQuery().semanticAvailable();
+    const note = semanticAvailable
+      ? undefined
+      : "Semantic search unavailable — results are keyword (FTS) matches only.";
+    return { content: [{ type: "text", text: JSON.stringify({ results, note }, null, 2) }] };
   },
 
   get_daily_briefing: async (args) => {
@@ -396,11 +427,16 @@ const LOCAL_HANDLERS: Record<
       source: r.source,
     }));
 
+    const semanticAvailable = await getQuery().semanticAvailable();
+    const note = semanticAvailable
+      ? undefined
+      : "Semantic search unavailable — results are keyword (FTS) matches only.";
+
     return {
       content: [
         {
           type: "text",
-          text: JSON.stringify({ term, results: related.slice(0, limit) }, null, 2),
+          text: JSON.stringify({ term, results: related.slice(0, limit), note }, null, 2),
         },
       ],
     };

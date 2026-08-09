@@ -22,17 +22,24 @@ interface ToolDetector {
   writeConfig(config: Record<string, unknown>): void;
 }
 
-// â”€â”€ Claude Code â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+/**
+ * Cross-platform executable check. Windows shells ship `where` (not `which`)
+ * and resolve `.cmd` shims installed by npm globally — so we must use it there.
+ */
+export function commandExists(name: string): boolean {
+  try {
+    const probeCmd = process.platform === "win32" ? `where ${name}` : `which ${name}`;
+    execSync(probeCmd, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// â”€â”€ Claude Code â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â€”€â”€â”€â”€â”€â€”€â”€â”€â”€â€”€â€”€â€”€â”€â”€â€”€â
 const claudeCode: ToolDetector = {
   name: "Claude Code",
-  detect: () => {
-    try {
-      execSync("which claude", { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  },
+  detect: () => commandExists("claude"),
   configPath: () => path.join(process.cwd(), ".claude", "settings.local.json"),
   readConfig: () => {
     try {
@@ -78,24 +85,20 @@ const cursor: ToolDetector = {
 // â”€â”€ OpenCode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const opencode: ToolDetector = {
   name: "OpenCode",
-  detect: () => {
-    try {
-      execSync("which opencode", { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  configPath: () => path.join(process.cwd(), "opencode.json"),
+  detect: () => commandExists("opencode"),
+  configPath: () => path.join(os.homedir(), ".config", "opencode", "opencode.json"),
   readConfig: () => {
     try {
-      return JSON.parse(fs.readFileSync(path.join(process.cwd(), "opencode.json"), "utf-8"));
+      return JSON.parse(fs.readFileSync(opencode.configPath(), "utf-8"));
     } catch {
       return {};
     }
   },
   writeConfig: (config) => {
-    fs.writeFileSync(path.join(process.cwd(), "opencode.json"), JSON.stringify(config, null, 2), "utf-8");
+    const p = opencode.configPath();
+    const dir = path.dirname(p);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(config, null, 2), "utf-8");
   },
 };
 
