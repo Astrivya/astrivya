@@ -9,6 +9,8 @@ export interface LayoutNode extends d3.SimulationNodeDatum {
   churnRate?: number;
   lastModified?: number;
   contributorCount?: number;
+  /** precomputed degree for label priority + hub sizing */
+  degree: number;
   fx?: number | null;
   fy?: number | null;
 }
@@ -20,12 +22,15 @@ export interface LayoutEdge {
   weight?: number;
 }
 
+type Phase = "unclump" | "refine";
+
 export class ForceLayout {
   private simulation: d3.Simulation<LayoutNode, LayoutEdge>;
   private nodes: LayoutNode[] = [];
   private edges: LayoutEdge[] = [];
   private onTickCallback?: () => void;
   private settled = false;
+  private phase: Phase = "unclump";
 
   constructor() {
     this.simulation = d3
@@ -35,23 +40,17 @@ export class ForceLayout {
         d3
           .forceLink<LayoutNode, LayoutEdge>()
           .id((d) => d.id)
-          .distance(80),
+          .distance(70)
+          .iterations(1),
       )
-      .force("charge", d3.forceManyBody().strength(-200).distanceMax(400))
-      .force("collide", d3.forceCollide().radius(35))
+      // Phase A: link + charge only, capped radius for O(n log n)
+      .force("charge", d3.forceManyBody().strength(-160).distanceMax(300).theta(1.2))
       .force("center", d3.forceCenter(0, 0))
-      .force("cluster", this.forceCommunityCentroid())
-      .alphaDecay(0.05);
+      .alphaDecay(0.03);
 
-    this.simulation.on("tick", () => {
-      if (this.onTickCallback) this.onTickCallback();
-      if (this.simulation.alpha() < 0.001) {
-        this.settled = true;
-        this.simulation.stop();
-      } else {
-        this.settled = false;
-      }
-    });
+    // Phase-based physics: run sim manually (chunked ticks) instead of the
+    // built-in tick loop so physics clock is decoupled from render clock.
+    this.simulation.stop();
   }
 
   isSettled(): boolean {
@@ -59,12 +58,18 @@ export class ForceLayout {
   }
 
   setGraph(nodes: AkgNode[], edges: AkgEdge[]): void {
-    // Map to LayoutNodes preserving existing coordinates if layout is already running
+    // Precompute degree for label priority / hub sizing
+    const degreeMap = new Map<string, number>();
+    for (const e of edges) {
+      const srcId = typeof e.source === "string" ? e.source : (e.source as AkgNode).id;
+      const tgtId = typeof e.target === "string" ? e.target : (e.target as AkgNode).id;
+      degreeMap.set(srcId, (degreeMap.get(srcId) || 0) + 1);
+      degreeMap.set(tgtId, (degreeMap.get(tgtId) || 0) + 1);
+    }
+
     const coordMap = new Map<string, { x: number; y: number }>();
     for (const n of this.nodes) {
-      if (n.x !== undefined && n.y !== undefined) {
-        coordMap.set(n.id, { x: n.x, y: n.y });
-      }
+      if (n.x !== undefined && n.y !== undefined) coordMap.set(n.id, { x: n.x, y: n.y });
     }
 
     this.nodes = nodes.map((n) => {
@@ -77,8 +82,9 @@ export class ForceLayout {
         churnRate: n.churnRate,
         lastModified: n.lastModified,
         contributorCount: n.contributorCount,
-        x: coords ? coords.x : Math.random() * 400 - 200,
-        y: coords ? coords.y : Math.random() * 400 - 200,
+        degree: degreeMap.get(n.id) || 0,
+        x: coords ? coords.x : Math.random() * 300 - 150,
+        y: coords ? coords.y : Math.random() * 300 - 150,
         vx: 0,
         vy: 0,
       };
@@ -93,15 +99,42 @@ export class ForceLayout {
 
     this.simulation.nodes(this.nodes);
     const linkForce = this.simulation.force("link") as d3.ForceLink<LayoutNode, LayoutEdge>;
-    if (linkForce) {
-      linkForce.links(this.edges);
-    }
+    if (linkForce) linkForce.links(this.edges);
 
+    this.phase = "unclump";
+    this.settled = false;
     this.simulation.alpha(1).restart();
   }
 
   onTick(callback: () => void): void {
     this.onTickCallback = callback;
+  }
+
+  /**
+   * Advance physics by `steps` ticks (chunked: called once per render frame).
+   * Phase A runs link+charge only; when alpha drops below the threshold we
+   * enable collide + cluster centroid (Phase B) for the final pass.
+   */
+  tick(steps = 1): void {
+    for (let i = 0; i < steps; i++) {
+      const alpha = this.simulation.alpha();
+      if (this.phase === "unclump" && alpha < 0.25) {
+        this.phase = "refine";
+        this.simulation
+          .force("collide", d3.forceCollide().radius(22).iterations(1))
+          .force("cluster", this.forceCommunityCentroid())
+          .alpha(0.35)
+          .restart();
+      }
+      this.simulation.tick();
+    }
+    if (this.simulation.alpha() < 0.005) {
+      this.settled = true;
+      this.simulation.stop();
+    } else {
+      this.settled = false;
+    }
+    if (this.onTickCallback) this.onTickCallback();
   }
 
   getNodes(): LayoutNode[] {
@@ -118,6 +151,7 @@ export class ForceLayout {
       node.fx = x;
       node.fy = y;
       this.simulation.alphaTarget(0.3).restart();
+      this.settled = false;
     }
   }
 
@@ -135,42 +169,33 @@ export class ForceLayout {
   }
 
   restart(): void {
+    this.phase = "unclump";
     this.settled = false;
-    this.simulation.alpha(1).restart();
+    this.simulation.alpha(0.8).restart();
   }
 
-  // 1. DEFAULT (EXPLORE) MODE
   applyDefaultLayout(): void {
     for (const n of this.nodes) {
       n.fx = null;
       n.fy = null;
     }
-
     this.simulation
-      .force("charge", d3.forceManyBody().strength(-200))
-      .force("collide", d3.forceCollide().radius(35))
-      .force("center", d3.forceCenter(0, 0))
-      .force("cluster", this.forceCommunityCentroid());
-
+      .force("charge", d3.forceManyBody().strength(-160).distanceMax(300))
+      .force("center", d3.forceCenter(0, 0));
     const linkForce = this.simulation.force("link") as d3.ForceLink<LayoutNode, LayoutEdge>;
-    if (linkForce) {
-      linkForce.distance(80);
-    }
-
+    if (linkForce) linkForce.distance(70);
+    this.phase = "unclump";
     this.simulation.alpha(0.8).restart();
     this.settled = false;
   }
 
-  // 2. FOCUS MODE (Radial constraint around central seed)
   applyFocusLayout(seedId: string): void {
     const centerNode = this.nodes.find((n) => n.id === seedId);
     if (!centerNode) return;
 
-    // Pin focused node at center (0,0)
     centerNode.fx = 0;
     centerNode.fy = 0;
 
-    // Identify distances from seed node in the current subgraph
     const adj = new Map<string, string[]>();
     for (const e of this.edges) {
       const srcId = typeof e.source === "string" ? e.source : (e.source as LayoutNode).id;
@@ -184,11 +209,9 @@ export class ForceLayout {
     const dists = new Map<string, number>();
     const queue: { id: string; d: number }[] = [{ id: seedId, d: 0 }];
     dists.set(seedId, 0);
-
     while (queue.length > 0) {
       const { id, d } = queue.shift()!;
-      const neighbors = adj.get(id) || [];
-      for (const n of neighbors) {
+      for (const n of adj.get(id) || []) {
         if (!dists.has(n)) {
           dists.set(n, d + 1);
           queue.push({ id: n, d: d + 1 });
@@ -196,8 +219,6 @@ export class ForceLayout {
       }
     }
 
-    // Set target positions along concentric rings
-    // For each distance, evenly space the nodes
     const nodesByDist = new Map<number, LayoutNode[]>();
     for (const n of this.nodes) {
       if (n.id === seedId) continue;
@@ -217,7 +238,6 @@ export class ForceLayout {
         node.y = radius * Math.sin(angle);
         node.vx = 0;
         node.vy = 0;
-        // Damp physics so they settle immediately on their concentric nodes
         node.fx = node.x;
         node.fy = node.y;
       }
@@ -227,18 +247,14 @@ export class ForceLayout {
     this.settled = false;
   }
 
-  // 3. PATH MODE (Horizontal chain constraint)
   applyPathLayout(pathNodeIds: string[]): void {
     const pathSet = new Set(pathNodeIds);
-
-    // Linear chain layout: source on left, target on right
     const count = pathNodeIds.length;
     const spacing = 180;
     const startX = -((count - 1) * spacing) / 2;
 
     for (let i = 0; i < count; i++) {
-      const id = pathNodeIds[i];
-      const node = this.nodes.find((n) => n.id === id);
+      const node = this.nodes.find((n) => n.id === pathNodeIds[i]);
       if (node) {
         node.fx = startX + i * spacing;
         node.fy = 0;
@@ -247,7 +263,6 @@ export class ForceLayout {
       }
     }
 
-    // Unrelated nodes pushed up/down or faded out
     let index = 0;
     for (const n of this.nodes) {
       if (pathSet.has(n.id)) continue;
@@ -262,7 +277,6 @@ export class ForceLayout {
     this.settled = false;
   }
 
-  // 4. TOPO MODE (Dependency layers)
   applyTopoLayout(entries: { node: { id: string }; depth: number }[], cycleNodeIds: string[]): void {
     const layerHeight = 130;
     const nodeSpacing = 180;
@@ -277,7 +291,6 @@ export class ForceLayout {
     }
     const maxDepth = byDepth.size > 0 ? Math.max(...byDepth.keys()) : 0;
 
-    // Position topo nodes in layered rows
     for (const [depth, ids] of byDepth.entries()) {
       const totalWidth = (ids.length - 1) * nodeSpacing;
       const startX = -totalWidth / 2;
@@ -293,7 +306,6 @@ export class ForceLayout {
       }
     }
 
-    // Cycle nodes at bottom
     let cycIdx = 0;
     for (const n of this.nodes) {
       if (cycleSet.has(n.id)) {
@@ -305,7 +317,6 @@ export class ForceLayout {
       }
     }
 
-    // Non-topo non-cycle nodes scattered to sides
     let sideIdx = 0;
     for (const n of this.nodes) {
       if (!topoIds.has(n.id) && !cycleSet.has(n.id)) {
@@ -321,7 +332,6 @@ export class ForceLayout {
     this.settled = false;
   }
 
-  // Helper clustering force
   private forceCommunityCentroid() {
     let nodes: LayoutNode[];
     function force(alpha: number) {

@@ -8,6 +8,7 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "dist"),
     emptyOutDir: true,
+    assetsInlineLimit: (filePath: string) => filePath.endsWith(".webp"),
     rollupOptions: {
       output: {
         entryFileNames: "assets/[name].js",

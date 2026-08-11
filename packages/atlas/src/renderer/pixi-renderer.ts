@@ -1,125 +1,163 @@
 import * as PIXI from "pixi.js";
 import type { LayoutEdge, LayoutNode } from "../layout/force-layout";
+import { PIXI_THEME, getNodeTheme } from "./theme";
 
-// Curated aesthetic theme hex colors
-const NODE_COLORS: Record<string, number> = {
-  workspace: 0x6366f1, // Indigo
-  folder: 0x8b5cf6, // Violet
-  file: 0x3b82f6, // Blue
-  function: 0x10b981, // Emerald
-  class: 0xf59e0b, // Amber
-  interface: 0x06b6d4, // Cyan
-  document: 0xec4899, // Pink
-  dependency: 0x6b7280, // Gray
-  adr: 0xef4444, // Red
-  task: 0xf97316, // Orange
-  goal: 0xa855f7, // Purple
-  person: 0xe11d48, // Rose
-  api: 0x2563eb, // Blue-600
-  default: 0x64748b, // Slate
-};
+/**
+ * Atlas PixiJS 8 renderer — "Obsidian" style.
+ *
+ * Efficiency design (10k-50k nodes):
+ *  - Nodes are Sprite instances sharing ONE white circle texture, tinted per
+ *    type/state → Pixi batches them into a single draw call. No per-frame
+ *    Graphics triangulation (the old per-node Graphics.redraw() path).
+ *  - Halo is one pre-baked additive radial-gradient texture, reused via tint+alpha.
+ *  - Labels are pre-rendered sprite textures (generateTexture), capped at
+ *    PIXI_THEME.label.budget, ranked by importance; never one PIXI.Text per node.
+ *  - Hover picking via a uniform-grid spatial hash rebuilt alongside positions;
+ *    selection ring is a single overlay Graphics, not 50k event listeners.
+ *  - Edges live in one Graphics; redrawn only while animating or on mode change.
+ */
 
-interface Particle {
-  sourceX: number;
-  sourceY: number;
-  targetX: number;
-  targetY: number;
-  progress: number; // 0 to 1
-  speed: number;
+interface SpatialCell {
+  nodes: number[];
 }
 
 export class PixiRenderer {
   app!: PIXI.Application;
   private container!: HTMLDivElement;
   private viewport!: PIXI.Container;
+
+  private nodeSprites: Map<string, PIXI.Sprite> = new Map();
+  private nodeData: Map<string, { x: number; y: number; radius: number }> = new Map();
+  private nodesArray: LayoutNode[] = [];
+
   private edgesGraphics!: PIXI.Graphics;
+  private ringGraphics!: PIXI.Graphics;
+  private haloSprite!: PIXI.Sprite;
 
-  private nodeContainers: Map<string, PIXI.Container> = new Map();
-  private particles: Particle[] = [];
-  private particlesGraphics!: PIXI.Graphics;
-  private particleTickerActive = false;
+  // Shared textures (white, tinted per node/state)
+  private dotTexture!: PIXI.Texture;
+  private haloTexture!: PIXI.Texture;
 
-  // Interactions State
+  // Label layer
+  private labelContainer!: PIXI.Container;
+  private labelSprites: Map<string, PIXI.Sprite> = new Map();
+  private labelTextureCache: Map<string, PIXI.Texture> = new Map();
+
+  // Spatial hash for hover picking
+  private cellSize = 48;
+  private spatial: Map<string, SpatialCell> = new Map();
+
+  // Camera / interaction state
+  private zoom = 1.0;
   private isDragging = false;
   private dragStart = { x: 0, y: 0 };
   private viewportStart = { x: 0, y: 0 };
-  private zoom = 1.0;
 
-  // Selected & Hovered IDs
   private selectedNodeId: string | null = null;
   private hoveredNodeId: string | null = null;
+  private onNodeSelectCallback?: (id: string) => void;
 
-  // Active Modes visual configurations
+  // Mode visual state
   private activeMode: "explore" | "focus" | "impact" | "path" | "topo" = "explore";
   private highlightedNodeIds: Set<string> = new Set();
   private pathNodeIds: string[] = [];
-
-  // Impact mapping
   private directImpactIds: Set<string> = new Set();
   private transitiveImpactIds: Set<string> = new Set();
-
-  // Topo mapping
   private topoDepths = new Map<string, number>();
   private topoCycleIds = new Set<string>();
-  private maxTopoDepth = 0;
 
-  // Performance
   private needsEdgeRedraw = true;
-  private textsDestroyed = false;
+  private lastSettled = false;
+  private lastLabelBand = -1;
+
   private containerWidth = 0;
   private containerHeight = 0;
 
-  // Callbacks
-  private onNodeSelectCallback?: (id: string) => void;
-
-  private animateParticlesBound = () => {
-    this.animateParticles(this.app.ticker.deltaTime);
-  };
+  constructor() {
+    this.onPointerMove = this.onPointerMove.bind(this);
+  }
 
   async init(container: HTMLDivElement): Promise<void> {
     this.container = container;
     this.containerWidth = container.clientWidth;
     this.containerHeight = container.clientHeight;
-    this.app = new PIXI.Application();
 
+    this.app = new PIXI.Application();
     await this.app.init({
       width: container.clientWidth,
       height: container.clientHeight,
       backgroundAlpha: 0,
       antialias: true,
+      preference: "webgl",
       resizeTo: container,
     });
 
     container.appendChild(this.app.canvas);
     this.app.canvas.classList.add("grabbable");
 
-    // Add viewport container
     this.viewport = new PIXI.Container();
     this.viewport.position.set(container.clientWidth / 2, container.clientHeight / 2);
     this.app.stage.addChild(this.viewport);
 
-    // Setup layers
+    // Shared textures
+    this.dotTexture = this.bakeDotTexture();
+    this.haloTexture = this.bakeHaloTexture();
+
+    // Layer order: edges → nodes → halos → ring → labels
     this.edgesGraphics = new PIXI.Graphics();
     this.viewport.addChild(this.edgesGraphics);
 
-    this.particlesGraphics = new PIXI.Graphics();
-    this.viewport.addChild(this.particlesGraphics);
+    this.haloSprite = new PIXI.Sprite(this.haloTexture);
+    this.haloSprite.blendMode = "add";
+    this.haloSprite.anchor.set(0.5);
+    this.haloSprite.visible = false;
+    this.haloSprite.zIndex = 1;
+    this.viewport.addChild(this.haloSprite);
+
+    this.ringGraphics = new PIXI.Graphics();
+    this.ringGraphics.zIndex = 2;
+    this.viewport.addChild(this.ringGraphics);
+
+    this.labelContainer = new PIXI.Container();
+    this.labelContainer.zIndex = 3;
+    this.viewport.addChild(this.labelContainer);
 
     this.setupViewportEvents();
+  }
 
-    // Setup animation ticker — lightweight per-frame culling + LOD
-    this.app.ticker.add(() => {
-      this.updateLOD();
-      this.cullNodes();
-    });
+  /** Bake a small white antialiased circle texture once. */
+  private bakeDotTexture(): PIXI.Texture {
+    const size = 64;
+    const g = new PIXI.Graphics()
+      .circle(size / 2, size / 2, size / 2 - 1)
+      .fill({ color: 0xffffff, alpha: 1 });
+    return this.app.renderer.generateTexture({ target: g, resolution: 2 });
+  }
+
+  /** Bake a soft radial-gradient halo (white; tinted via sprite.tint). */
+  private bakeHaloTexture(): PIXI.Texture {
+    const size = 128;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d")!;
+    const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grad.addColorStop(0, "rgba(255,255,255,0.55)");
+    grad.addColorStop(0.4, "rgba(255,255,255,0.18)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    return PIXI.Texture.from(canvas);
   }
 
   private setupViewportEvents(): void {
     const canvas = this.app.canvas;
 
-    canvas.addEventListener("mousedown", (e) => {
-      // Don't drag if clicking directly on a node
-      if (this.hoveredNodeId) return;
+    canvas.addEventListener("pointerdown", (e) => {
+      if (this.hoveredNodeId) {
+        if (this.onNodeSelectCallback) this.onNodeSelectCallback(this.hoveredNodeId);
+        return;
+      }
       this.isDragging = true;
       this.dragStart.x = e.clientX;
       this.dragStart.y = e.clientY;
@@ -129,14 +167,8 @@ export class PixiRenderer {
       canvas.classList.add("grabbing");
     });
 
-    window.addEventListener("mousemove", (e) => {
-      if (!this.isDragging) return;
-      const dx = e.clientX - this.dragStart.x;
-      const dy = e.clientY - this.dragStart.y;
-      this.viewport.position.set(this.viewportStart.x + dx, this.viewportStart.y + dy);
-    });
-
-    window.addEventListener("mouseup", () => {
+    window.addEventListener("pointermove", this.onPointerMove);
+    window.addEventListener("pointerup", () => {
       if (this.isDragging) {
         this.isDragging = false;
         canvas.classList.remove("grabbing");
@@ -149,26 +181,97 @@ export class PixiRenderer {
       (e) => {
         e.preventDefault();
         const zoomFactor = 1.1;
-        const mouseX = e.clientX - this.container.getBoundingClientRect().left;
-        const mouseY = e.clientY - this.container.getBoundingClientRect().top;
+        const rect = this.container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
 
-        // Calculate world coordinates of cursor before zoom
         const worldX = (mouseX - this.viewport.position.x) / this.zoom;
         const worldY = (mouseY - this.viewport.position.y) / this.zoom;
 
         if (e.deltaY < 0) {
-          this.zoom = Math.min(4.0, this.zoom * zoomFactor);
+          this.zoom = Math.min(PIXI_THEME.zoom.max, this.zoom * zoomFactor);
         } else {
-          this.zoom = Math.max(0.08, this.zoom / zoomFactor);
+          this.zoom = Math.max(PIXI_THEME.zoom.min, this.zoom / zoomFactor);
         }
 
         this.viewport.scale.set(this.zoom);
-
-        // Adjust viewport position so cursor point remains static in screen space
         this.viewport.position.set(mouseX - worldX * this.zoom, mouseY - worldY * this.zoom);
+        this.onCameraChanged();
       },
       { passive: false },
     );
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    const rect = this.container.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+
+    if (this.isDragging) {
+      const dx = e.clientX - this.dragStart.x;
+      const dy = e.clientY - this.dragStart.y;
+      this.viewport.position.set(this.viewportStart.x + dx, this.viewportStart.y + dy);
+      this.onCameraChanged();
+      return;
+    }
+
+    // Pick node under cursor via spatial hash
+    const wx = (sx - this.viewport.position.x) / this.zoom;
+    const wy = (sy - this.viewport.position.y) / this.zoom;
+    const hit = this.pickNode(wx, wy);
+    if (hit !== this.hoveredNodeId) {
+      this.hoveredNodeId = hit;
+      this.app.canvas.style.cursor = hit ? "pointer" : this.isDragging ? "grabbing" : "grab";
+      this.updateRing();
+      this.requestLabelRefresh();
+    }
+  }
+
+  /** Uniform-grid spatial hash lookup. */
+  private pickNode(wx: number, wy: number): string | null {
+    const cellX = Math.floor(wx / this.cellSize);
+    const cellY = Math.floor(wy / this.cellSize);
+    const best: { id: string; d2: number } | null = null;
+
+    let closest: { id: string; d2: number } | null = best;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const cell = this.spatial.get(`${cellX + dx},${cellY + dy}`);
+        if (!cell) continue;
+        for (const idx of cell.nodes) {
+          const node = this.nodesArray[idx];
+          if (!node) continue;
+          const data = this.nodeData.get(node.id);
+          if (!data) continue;
+          const nx = data.x;
+          const ny = data.y;
+          const d2 = (nx - wx) * (nx - wx) + (ny - wy) * (ny - wy);
+          const hitRadius = Math.max(data.radius, PIXI_THEME.hitRadius);
+          if (d2 <= hitRadius * hitRadius && (!closest || d2 < closest.d2)) {
+            closest = { id: node.id, d2 };
+          }
+        }
+      }
+    }
+    return closest ? closest.id : null;
+  }
+
+  private rebuildSpatial(): void {
+    this.spatial.clear();
+    for (let i = 0; i < this.nodesArray.length; i++) {
+      const n = this.nodesArray[i];
+      const data = this.nodeData.get(n.id);
+      if (!data) continue;
+      const cx = Math.floor(data.x / this.cellSize);
+      const cy = Math.floor(data.y / this.cellSize);
+      const key = `${cx},${cy}`;
+      let cell = this.spatial.get(key);
+      if (!cell) {
+        cell = { nodes: [] };
+        this.spatial.set(key, cell);
+      }
+      cell.nodes.push(i);
+    }
   }
 
   onNodeSelect(callback: (id: string) => void): void {
@@ -177,7 +280,8 @@ export class PixiRenderer {
 
   setSelection(nodeId: string | null): void {
     this.selectedNodeId = nodeId;
-    this.requestRender();
+    this.updateRing();
+    this.requestLabelRefresh();
   }
 
   setVisualMode(
@@ -189,7 +293,6 @@ export class PixiRenderer {
       transitiveImpactIds?: string[];
       topoDepths?: { nodeId: string; depth: number }[];
       topoCycleIds?: string[];
-      maxTopoDepth?: number;
     },
   ): void {
     this.activeMode = mode;
@@ -197,142 +300,61 @@ export class PixiRenderer {
     this.pathNodeIds = opts?.pathIds || [];
     this.directImpactIds = new Set(opts?.directImpactIds || []);
     this.transitiveImpactIds = new Set(opts?.transitiveImpactIds || []);
-
-    if (mode === "topo") {
-      this.topoDepths = new Map((opts?.topoDepths || []).map((t) => [t.nodeId, t.depth]));
-      this.topoCycleIds = new Set(opts?.topoCycleIds || []);
-      this.maxTopoDepth = opts?.maxTopoDepth ?? 0;
-    } else {
-      this.topoDepths = new Map();
-      this.topoCycleIds = new Set();
-      this.maxTopoDepth = 0;
-    }
-
-    if (mode === "path" && this.pathNodeIds.length > 1) {
-      this.initParticles();
-      if (!this.particleTickerActive) {
-        this.particleTickerActive = true;
-        this.app.ticker.add(this.animateParticlesBound);
-      }
-    } else {
-      this.particles = [];
-      if (this.particleTickerActive) {
-        this.particleTickerActive = false;
-        this.app.ticker.remove(this.animateParticlesBound);
-      }
-    }
+    this.topoDepths = new Map((opts?.topoDepths || []).map((t) => [t.nodeId, t.depth]));
+    this.topoCycleIds = new Set(opts?.topoCycleIds || []);
 
     this.needsEdgeRedraw = true;
-    this.requestRender();
+    this.applyNodeState();
   }
 
   updateGraph(nodes: LayoutNode[], edges: LayoutEdge[], visibleTypes: Set<string>): void {
-    this.textsDestroyed = false;
-    this.needsEdgeRedraw = true;
-    // Remove existing nodes
-    for (const container of this.nodeContainers.values()) {
-      this.viewport.removeChild(container);
-      container.destroy({ children: true });
+    // Dispose old sprites
+    for (const sprite of this.nodeSprites.values()) {
+      sprite.destroy();
     }
-    this.nodeContainers.clear();
+    this.nodeSprites.clear();
+    this.nodeData.clear();
+    this.nodesArray = nodes;
+    this.labelSprites.forEach((s) => s.destroy());
+    this.labelSprites.clear();
+    this.labelTextureCache.forEach((t) => t.destroy());
+    this.labelTextureCache.clear();
 
-    // Render nodes
+    // Create a sprite per node (shared texture, tinted by type)
     for (const n of nodes) {
       if (!visibleTypes.has(n.type)) continue;
-
-      const nodeContainer = new PIXI.Container();
-      nodeContainer.position.set(n.x || 0, n.y || 0);
-
-      // Node base size
-      const radius = n.type === "file" ? 14 : n.type === "function" ? 8 : 11;
-      const colorHex = NODE_COLORS[n.type] || NODE_COLORS.default;
-
-      // Shape Graphics based on node type
-      const graphics = new PIXI.Graphics();
-      if (n.type === "task") {
-        graphics.moveTo(0, -radius);
-        graphics.lineTo(radius, radius * 0.8);
-        graphics.lineTo(-radius, radius * 0.8);
-        graphics.closePath();
-      } else if (n.type === "agent" || n.type === "agent_action") {
-        const sides = 6;
-        for (let i = 0; i < sides; i++) {
-          const angle = (i / sides) * Math.PI * 2;
-          const hx = radius * Math.cos(angle);
-          const hy = radius * Math.sin(angle);
-          if (i === 0) graphics.moveTo(hx, hy);
-          else graphics.lineTo(hx, hy);
-        }
-        graphics.closePath();
-      } else {
-        graphics.circle(0, 0, radius);
-      }
-      graphics.fill({ color: colorHex });
-
-      // Border outline
-      graphics.stroke({ color: 0xffffff, width: 1.5, alpha: 0.5 });
-
-      nodeContainer.addChild(graphics);
-
-      // Text label description
-      const labelText = new PIXI.Text({
-        text: n.label,
-        style: {
-          fontFamily: "Outfit",
-          fontSize: n.type === "file" ? 11 : 9,
-          fill: 0xf8fafc,
-          stroke: { color: 0x07050f, width: 3 },
-        },
-      });
-      labelText.anchor.set(0.5, -1.5);
-      nodeContainer.addChild(labelText);
-
-      // Node interaction behaviors
-      nodeContainer.eventMode = "static";
-      nodeContainer.cursor = "pointer";
-
-      nodeContainer.on("pointerover", () => {
-        this.hoveredNodeId = n.id;
-        this.app.canvas.style.cursor = "pointer";
-        this.requestRender();
-      });
-
-      nodeContainer.on("pointerout", () => {
-        this.hoveredNodeId = null;
-        this.app.canvas.style.cursor = this.isDragging ? "grabbing" : "grab";
-        this.requestRender();
-      });
-
-      nodeContainer.on("pointerdown", () => {
-        if (this.onNodeSelectCallback) {
-          this.onNodeSelectCallback(n.id);
-        }
-      });
-
-      this.viewport.addChild(nodeContainer);
-      this.nodeContainers.set(n.id, nodeContainer);
+      const theme = getNodeTheme(n.type);
+      const sprite = new PIXI.Sprite(this.dotTexture);
+      sprite.anchor.set(0.5);
+      sprite.tint = theme.dim;
+      sprite.alpha = PIXI_THEME.nodeAlpha.rest;
+      sprite.position.set(n.x || 0, n.y || 0);
+      sprite.scale.set((theme.radius * 2) / this.dotTexture.width, (theme.radius * 2) / this.dotTexture.height);
+      this.viewport.addChild(sprite);
+      this.nodeSprites.set(n.id, sprite);
+      this.nodeData.set(n.id, { x: n.x || 0, y: n.y || 0, radius: theme.radius });
     }
 
+    this.rebuildSpatial();
     this.needsEdgeRedraw = true;
     this.drawEdges(nodes, edges, visibleTypes);
+    this.lastSettled = false;
+    this.lastLabelBand = -1;
+    this.applyNodeState();
   }
 
-  // Draw edges between active coordinate locations
   drawEdges(nodes: LayoutNode[], edges: LayoutEdge[], visibleTypes: Set<string>): void {
     this.edgesGraphics.clear();
-
     const nodeMap = new Map<string, LayoutNode>();
-    for (const n of nodes) {
-      nodeMap.set(n.id, n);
-    }
+    for (const n of nodes) nodeMap.set(n.id, n);
+
+    const theme = PIXI_THEME.edge;
 
     for (const e of edges) {
       const srcId = typeof e.source === "string" ? e.source : (e.source as LayoutNode).id;
       const tgtId = typeof e.target === "string" ? e.target : (e.target as LayoutNode).id;
-
       const srcNode = nodeMap.get(srcId);
       const tgtNode = nodeMap.get(tgtId);
-
       if (!srcNode || !tgtNode) continue;
       if (!visibleTypes.has(srcNode.type) || !visibleTypes.has(tgtNode.type)) continue;
 
@@ -341,336 +363,291 @@ export class PixiRenderer {
       const x2 = tgtNode.x || 0;
       const y2 = tgtNode.y || 0;
 
-      // Edge style configurations based on visual modes
-      let colorVal = 0x475569; // default gray
-      let alphaVal = 0.25;
-      let widthVal = 1;
+      let colorVal: number = theme.rest;
+      let alphaVal: number = theme.restAlpha;
+      let widthVal: number = theme.width;
+
+      const inPath = this.activeMode === "path";
+      const isPathEdge =
+        inPath && this.pathNodeIds.includes(srcId) && this.pathNodeIds.includes(tgtId);
 
       if (this.activeMode === "focus") {
         const isPath = this.highlightedNodeIds.has(srcId) && this.highlightedNodeIds.has(tgtId);
-        alphaVal = isPath ? 0.6 : 0.05;
+        alphaVal = isPath ? theme.focus[1] : theme.restAlpha * 0.4;
         if (isPath) {
-          colorVal = 0x8b5cf6; // focused Violet links
-          widthVal = 1.5;
+          colorVal = theme.focus[0];
+          widthVal = theme.focus[2];
         }
       } else if (this.activeMode === "impact") {
         const isAffect =
           (this.directImpactIds.has(srcId) || this.transitiveImpactIds.has(srcId) || srcId === this.selectedNodeId) &&
           (this.directImpactIds.has(tgtId) || this.transitiveImpactIds.has(tgtId) || tgtId === this.selectedNodeId);
-        alphaVal = isAffect ? 0.7 : 0.05;
+        alphaVal = isAffect ? theme.impact[1] : theme.restAlpha * 0.4;
         if (isAffect) {
-          colorVal = 0xef4444; // impacted links show Red
-          widthVal = 2.0;
+          colorVal = theme.impact[0];
+          widthVal = theme.impact[2];
         }
       } else if (this.activeMode === "path") {
         const srcIdx = this.pathNodeIds.indexOf(srcId);
         const tgtIdx = this.pathNodeIds.indexOf(tgtId);
-        const isPathEdge = srcIdx !== -1 && tgtIdx !== -1 && Math.abs(srcIdx - tgtIdx) === 1;
-
-        alphaVal = isPathEdge ? 0.8 : 0.05;
-        if (isPathEdge) {
-          colorVal = 0xf59e0b; // path trace links show Amber
-          widthVal = 2.5;
+        const pathEdge = srcIdx !== -1 && tgtIdx !== -1 && Math.abs(srcIdx - tgtIdx) === 1;
+        alphaVal = pathEdge ? theme.path[1] : theme.restAlpha * 0.4;
+        if (pathEdge) {
+          colorVal = theme.path[0];
+          widthVal = theme.path[2];
         }
       } else if (this.activeMode === "topo") {
         const srcDepth = this.topoDepths.get(srcId);
         const tgtDepth = this.topoDepths.get(tgtId);
         const isTopoEdge = srcDepth !== undefined && tgtDepth !== undefined;
         const isCycleEdge = this.topoCycleIds.has(srcId) && this.topoCycleIds.has(tgtId);
-        alphaVal = isTopoEdge ? 0.5 : isCycleEdge ? 0.5 : 0.05;
+        alphaVal = isTopoEdge ? theme.topo[1] : isCycleEdge ? theme.cycle[1] : theme.restAlpha * 0.4;
         if (isTopoEdge) {
-          colorVal = 0x6366f1;
-          widthVal = 1.5;
+          colorVal = theme.topo[0];
+          widthVal = theme.topo[2];
         } else if (isCycleEdge) {
-          colorVal = 0xef4444;
-          widthVal = 1.5;
+          colorVal = theme.cycle[0];
+          widthVal = theme.cycle[2];
         }
       }
 
-      this.edgesGraphics.moveTo(x1, y1);
-      this.edgesGraphics.lineTo(x2, y2);
-      this.edgesGraphics.stroke({ color: colorVal, width: widthVal, alpha: alphaVal });
+      // Weight scales resting alpha
+      if (this.activeMode === "explore" && e.weight) {
+        alphaVal = Math.min(theme.weightMaxAlpha, theme.restAlpha + e.weight * 0.2);
+      }
+
+      if (isPathEdge && this.activeMode === "path") {
+        // slight curve for the highlighted path edge
+        const midX = (x1 + x2) / 2;
+        const midY = (y1 + y2) / 2 - Math.abs(x2 - x1) * 0.15;
+        this.edgesGraphics.moveTo(x1, y1);
+        this.edgesGraphics.quadraticCurveTo(midX, midY, x2, y2);
+        this.edgesGraphics.stroke({ color: colorVal, width: widthVal, alpha: alphaVal });
+      } else {
+        this.edgesGraphics.moveTo(x1, y1);
+        this.edgesGraphics.lineTo(x2, y2);
+        this.edgesGraphics.stroke({ color: colorVal, width: widthVal, alpha: alphaVal });
+      }
     }
   }
 
-  // Update dynamic Node coordinates positions calculated by physics engine
+  /** Per-frame: move sprites only (no geometry rebuild). Rebuild spatial hash lazily. */
   updateNodesPositions(nodes: LayoutNode[], edges: LayoutEdge[], visibleTypes: Set<string>, settled = false): void {
-    // Compute viewport bounds for culling
-    const vpX = this.viewport.position.x;
-    const vpY = this.viewport.position.y;
-    const zoom = this.zoom;
-    const cullMargin = 100;
-    const minWx = (-vpX - cullMargin) / zoom;
-    const maxWx = (this.containerWidth - vpX + cullMargin) / zoom;
-    const minWy = (-vpY - cullMargin) / zoom;
-    const maxWy = (this.containerHeight - vpY + cullMargin) / zoom;
-
-    for (const n of nodes) {
-      const container = this.nodeContainers.get(n.id);
-      if (!container) continue;
-
-      container.position.set(n.x || 0, n.y || 0);
-
-      // Cull: skip full render for off-screen nodes
-      const nx = n.x || 0;
-      const ny = n.y || 0;
-      const isOnScreen = nx >= minWx && nx <= maxWx && ny >= minWy && ny <= maxWy;
-      container.visible = isOnScreen;
-      if (!isOnScreen) continue;
-
-      // When settled, skip graphics redraw — just update position and opacity
-      if (settled) {
-        // Only update opacity for dimmed nodes
-        let opacityVal = 1.0;
-        if (this.activeMode === "focus" && !this.highlightedNodeIds.has(n.id)) {
-          opacityVal = 0.08;
-        } else if (
-          this.activeMode === "impact" &&
-          n.id !== this.selectedNodeId &&
-          !this.directImpactIds.has(n.id) &&
-          !this.transitiveImpactIds.has(n.id)
-        ) {
-          opacityVal = 0.08;
-        } else if (this.activeMode === "path" && !this.pathNodeIds.includes(n.id)) {
-          opacityVal = 0.08;
-        } else if (this.activeMode === "topo" && !this.topoDepths.has(n.id) && !this.topoCycleIds.has(n.id)) {
-          opacityVal = 0.08;
-        }
-        container.alpha = opacityVal;
-        continue;
-      }
-
-      // Full redraw — the node is on screen and layout is still animating
-      const ring = container.children[0] as PIXI.Graphics;
-      ring.clear();
-      const radius = n.type === "file" ? 14 : n.type === "function" ? 8 : 11;
-      const colorHex = NODE_COLORS[n.type] || NODE_COLORS.default;
-
-      // Topo mode: override fill color by depth
-      let topoColorOverride: number | null = null;
-      if (this.activeMode === "topo") {
-        if (this.topoCycleIds.has(n.id)) {
-          topoColorOverride = 0xef4444;
-        } else {
-          const depth = this.topoDepths.get(n.id);
-          if (depth !== undefined && this.maxTopoDepth > 0) {
-            const ratio = depth / this.maxTopoDepth;
-            if (ratio < 0.25) topoColorOverride = 0x10b981;
-            else if (ratio < 0.5) topoColorOverride = 0x84cc16;
-            else if (ratio < 0.75) topoColorOverride = 0xeab308;
-            else topoColorOverride = 0xf97316;
-          }
-        }
-      }
-
-      if (n.type === "task") {
-        ring.moveTo(0, -radius);
-        ring.lineTo(radius, radius * 0.8);
-        ring.lineTo(-radius, radius * 0.8);
-        ring.closePath();
-      } else if (n.type === "agent" || n.type === "agent_action") {
-        const sides = 6;
-        for (let i = 0; i < sides; i++) {
-          const angle = (i / sides) * Math.PI * 2;
-          const hx = radius * Math.cos(angle);
-          const hy = radius * Math.sin(angle);
-          if (i === 0) ring.moveTo(hx, hy);
-          else ring.lineTo(hx, hy);
-        }
-        ring.closePath();
-      } else {
-        ring.circle(0, 0, radius);
-      }
-      ring.fill({ color: topoColorOverride !== null ? topoColorOverride : colorHex });
-
-      // Highlight nodes depending on active visual filters
-      let glowColor: number | null = null;
-      let strokeWidth = 1.5;
-      let strokeAlpha = 0.5;
-
-      if (n.id === this.selectedNodeId) {
-        glowColor = 0xffffff;
-        strokeWidth = 3.5;
-        strokeAlpha = 1.0;
-      } else if (n.id === this.hoveredNodeId) {
-        glowColor = 0xa5b4fc;
-        strokeWidth = 2.5;
-        strokeAlpha = 0.8;
-      } else if (this.activeMode === "focus" && this.highlightedNodeIds.has(n.id)) {
-        glowColor = 0x8b5cf6;
-        strokeWidth = 2.0;
-        strokeAlpha = 0.7;
-      } else if (this.activeMode === "impact") {
-        if (n.id === this.selectedNodeId) {
-          glowColor = 0xef4444;
-        } else if (this.directImpactIds.has(n.id)) {
-          glowColor = 0xf97316;
-        } else if (this.transitiveImpactIds.has(n.id)) {
-          glowColor = 0xf59e0b;
-        }
-        if (glowColor) {
-          strokeWidth = 2.5;
-          strokeAlpha = 0.8;
-        }
-      } else if (this.activeMode === "path" && this.pathNodeIds.includes(n.id)) {
-        glowColor = 0xf59e0b;
-        strokeWidth = 2.5;
-        strokeAlpha = 0.9;
-      } else if (this.activeMode === "topo") {
-        if (this.topoCycleIds.has(n.id)) {
-          glowColor = 0xef4444;
-          strokeWidth = 3.0;
-          strokeAlpha = 0.9;
-        } else if (this.topoDepths.has(n.id)) {
-          glowColor = 0x6366f1;
-          strokeWidth = 2.0;
-          strokeAlpha = 0.7;
-        }
-      }
-
-      ring.stroke({
-        color: glowColor !== null ? glowColor : 0xffffff,
-        width: strokeWidth,
-        alpha: strokeAlpha,
-      });
-
-      // Dim unrelated nodes opacity
-      let opacityVal = 1.0;
-      if (this.activeMode === "focus" && !this.highlightedNodeIds.has(n.id)) {
-        opacityVal = 0.08;
-      } else if (
-        this.activeMode === "impact" &&
-        n.id !== this.selectedNodeId &&
-        !this.directImpactIds.has(n.id) &&
-        !this.transitiveImpactIds.has(n.id)
-      ) {
-        opacityVal = 0.08;
-      } else if (this.activeMode === "path" && !this.pathNodeIds.includes(n.id)) {
-        opacityVal = 0.08;
-      } else if (this.activeMode === "topo" && !this.topoDepths.has(n.id) && !this.topoCycleIds.has(n.id)) {
-        opacityVal = 0.08;
-      }
-      container.alpha = opacityVal;
-    }
-
-    // Only redraw edges when layout is animating or mode just changed
-    if (this.needsEdgeRedraw || !settled) {
+    // During animation, positions move every tick → redraw edges + rebuild spatial.
+    if (!settled || this.needsEdgeRedraw) {
       this.drawEdges(nodes, edges, visibleTypes);
       if (settled) this.needsEdgeRedraw = false;
     }
-  }
 
-  // Shortest path active particle flows
-  private initParticles(): void {
-    this.particles = [];
-    for (let i = 0; i < this.pathNodeIds.length - 1; i++) {
-      this.particles.push({
-        sourceX: 0,
-        sourceY: 0,
-        targetX: 0,
-        targetY: 0,
-        progress: Math.random(), // Stagger start offsets
-        speed: 0.015 + Math.random() * 0.01,
-      });
-    }
-  }
-
-  private animateParticles(deltaTime: number): void {
-    this.particlesGraphics.clear();
-    if (this.activeMode !== "path" || this.pathNodeIds.length < 2) return;
-
-    for (let i = 0; i < this.pathNodeIds.length - 1; i++) {
-      const srcId = this.pathNodeIds[i];
-      const tgtId = this.pathNodeIds[i + 1];
-
-      const srcContainer = this.nodeContainers.get(srcId);
-      const tgtContainer = this.nodeContainers.get(tgtId);
-
-      if (!srcContainer || !tgtContainer) continue;
-
-      const p = this.particles[i] || {
-        sourceX: 0,
-        sourceY: 0,
-        targetX: 0,
-        targetY: 0,
-        progress: 0,
-        speed: 0.02,
-      };
-
-      p.sourceX = srcContainer.position.x;
-      p.sourceY = srcContainer.position.y;
-      p.targetX = tgtContainer.position.x;
-      p.targetY = tgtContainer.position.y;
-
-      p.progress += p.speed * deltaTime;
-      if (p.progress >= 1.0) {
-        p.progress = 0.0;
-      }
-
-      this.particles[i] = p;
-
-      // Calculate current location
-      const curX = p.sourceX + (p.targetX - p.sourceX) * p.progress;
-      const curY = p.sourceY + (p.targetY - p.sourceY) * p.progress;
-
-      // Draw particle dot
-      this.particlesGraphics.circle(curX, curY, 4);
-      this.particlesGraphics.fill({ color: 0xffffff });
-      this.particlesGraphics.stroke({ color: 0xf59e0b, width: 2 });
-    }
-  }
-
-  // Level of Detail: Fade text labels depending on viewport scale zoom levels
-  private updateLOD(): void {
-    if (this.zoom < 0.2) {
-      // Destroy text objects entirely to free Canvas2D memory
-      if (!this.textsDestroyed) {
-        this.textsDestroyed = true;
-        for (const container of this.nodeContainers.values()) {
-          if (container.children.length > 1) {
-            const label = container.children[1] as PIXI.Text;
-            container.removeChild(label);
-            label.destroy();
-          }
-        }
-      }
-      return;
-    }
-    this.textsDestroyed = false;
-
-    for (const [id, container] of this.nodeContainers.entries()) {
-      const label = container.children[1] as PIXI.Text;
-      if (!label) continue;
-
-      // LOD zoom thresholds:
-      if (this.zoom < 0.35) {
-        label.visible = false;
-      } else if (this.zoom < 0.65) {
-        // Only show files/classes labels at mid range zoom
-        const type = id.split("::")[0];
-        label.visible = type === "file" || type === "workspace" || type === "class";
-      } else {
-        label.visible = true;
-      }
-    }
-  }
-
-  // Lightweight per-frame visibility culling for settled layout
-  private cullNodes(): void {
     const vpX = this.viewport.position.x;
     const vpY = this.viewport.position.y;
     const zoom = this.zoom;
-    const cullMargin = 100;
-    const minWx = (-vpX - cullMargin) / zoom;
-    const maxWx = (this.containerWidth - vpX + cullMargin) / zoom;
-    const minWy = (-vpY - cullMargin) / zoom;
-    const maxWy = (this.containerHeight - vpY + cullMargin) / zoom;
+    const margin = PIXI_THEME.cullMargin;
+    const minWx = (-vpX - margin) / zoom;
+    const maxWx = (this.containerWidth - vpX + margin) / zoom;
+    const minWy = (-vpY - margin) / zoom;
+    const maxWy = (this.containerHeight - vpY + margin) / zoom;
 
-    for (const container of this.nodeContainers.values()) {
-      const nx = container.position.x;
-      const ny = container.position.y;
-      container.visible = nx >= minWx && nx <= maxWx && ny >= minWy && ny <= maxWy;
+    for (const n of nodes) {
+      const sprite = this.nodeSprites.get(n.id);
+      const data = this.nodeData.get(n.id);
+      if (!sprite || !data) continue;
+
+      const nx = n.x || 0;
+      const ny = n.y || 0;
+      data.x = nx;
+      data.y = ny;
+      sprite.position.set(nx, ny);
+
+      const onScreen = nx >= minWx && nx <= maxWx && ny >= minWy && ny <= maxWy;
+      sprite.visible = onScreen;
     }
+
+    if (!settled || this.lastSettled !== settled) {
+      this.rebuildSpatial();
+    }
+    this.lastSettled = settled;
+
+    if (!settled) {
+      this.applyNodeState();
+    }
+
+    // Labels + ring only refresh on discrete changes, handled in tick hooks via
+    // requestLabelRefresh() / updateRing() to avoid per-frame cost.
+  }
+
+  /** Apply hover/selection/mode styling to all sprites (cheap: tint + alpha only). */
+  private applyNodeState(): void {
+    const theme = PIXI_THEME;
+    for (const [id, sprite] of this.nodeSprites.entries()) {
+      const n = this.nodesArray.find((x) => x.id === id);
+      if (!n) continue;
+      const t = getNodeTheme(n.type);
+
+      let tint: number = t.dim;
+      let alpha: number = theme.nodeAlpha.rest;
+
+      if (id === this.hoveredNodeId || id === this.selectedNodeId) {
+        tint = t.bright;
+        alpha = 1;
+      } else if (this.activeMode === "focus" && !this.highlightedNodeIds.has(id)) {
+        alpha = theme.nodeAlpha.ghost;
+      } else if (this.activeMode === "impact" && id !== this.selectedNodeId) {
+        alpha = this.directImpactIds.has(id) || this.transitiveImpactIds.has(id) ? alpha : theme.nodeAlpha.ghost;
+      } else if (this.activeMode === "path" && !this.pathNodeIds.includes(id)) {
+        alpha = theme.nodeAlpha.ghost;
+      } else if (this.activeMode === "topo" && !this.topoDepths.has(id) && !this.topoCycleIds.has(id)) {
+        alpha = theme.nodeAlpha.ghost;
+      }
+
+      sprite.tint = tint;
+      sprite.alpha = alpha;
+    }
+  }
+
+  /** Position the single halo + ring sprite at the hovered/selected node. */
+  private updateRing(): void {
+    const id = this.hoveredNodeId || this.selectedNodeId;
+    const sprite = id ? this.nodeSprites.get(id) : null;
+    if (!id || !sprite) {
+      this.haloSprite.visible = false;
+      this.ringGraphics.clear();
+      return;
+    }
+
+    const theme = getNodeTheme(id.startsWith("cluster:") ? "cluster" : this.nodesArray.find((n) => n.id === id)?.type || "default");
+    const isHover = id === this.hoveredNodeId;
+    const isSelected = id === this.selectedNodeId;
+    const useAccent = isSelected;
+    const colorVal = isSelected ? theme.bright : theme.base;
+
+    this.haloSprite.visible = true;
+    this.haloSprite.tint = useAccent ? theme.bright : theme.base;
+    this.haloSprite.alpha = isSelected ? PIXI_THEME.halo.selAlpha : PIXI_THEME.halo.hoverAlpha;
+    const haloScale = (theme.radius * 5) / this.haloTexture.width;
+    this.haloSprite.position.set(sprite.x, sprite.y);
+    this.haloSprite.scale.set(haloScale);
+
+    this.ringGraphics.clear();
+    const w = isSelected ? PIXI_THEME.ring.selW : PIXI_THEME.ring.hoverW;
+    const a = isSelected ? PIXI_THEME.ring.selA : PIXI_THEME.ring.hoverA;
+    this.ringGraphics.circle(0, 0, theme.radius + 3);
+    this.ringGraphics.stroke({ color: colorVal, width: w, alpha: a });
+    this.ringGraphics.position.set(sprite.x, sprite.y);
+    void isHover;
+  }
+
+  /**
+   * Labels: capped, priority-ranked, pre-rendered textures. Refreshed only on
+   * settle transitions, zoom-band crossings, and selection/hover changes.
+   */
+  requestLabelRefresh(): void {
+    const zoomBand = this.computeLabelBand();
+    if (zoomBand !== this.lastLabelBand) {
+      this.lastLabelBand = zoomBand;
+      this.refreshLabels();
+    }
+  }
+
+  private computeLabelBand(): number {
+    if (this.zoom < PIXI_THEME.label.lodZooms[0]) return 0;
+    if (this.zoom < PIXI_THEME.label.lodZooms[1]) return 1;
+    return 2;
+  }
+
+  private refreshLabels(): void {
+    for (const s of this.labelSprites.values()) s.destroy();
+    this.labelSprites.clear();
+
+    const band = this.lastLabelBand;
+    if (band === 0 || !this.lastSettled) return;
+
+    // Score visible nodes; always include hovered/selected
+    const candidates: { node: LayoutNode; score: number }[] = [];
+    for (const n of this.nodesArray) {
+      const sprite = this.nodeSprites.get(n.id);
+      if (!sprite || !sprite.visible) continue;
+      if (n.id === this.hoveredNodeId || n.id === this.selectedNodeId) {
+        candidates.push({ node: n, score: Number.POSITIVE_INFINITY });
+        continue;
+      }
+      let typeWeight = 1;
+      if (n.type === "file" || n.type === "workspace" || n.type === "class") typeWeight = 3;
+      else if (n.type === "adr") typeWeight = 2;
+      if (band === 1 && typeWeight < 3) continue;
+      const degree = (n as any).degree || 0;
+      const data = this.nodeData.get(n.id);
+      const screenRadius = data ? data.radius * this.zoom : 0;
+      if (screenRadius < 6) continue;
+      candidates.push({ node: n, score: typeWeight * (1 + degree / 10) * (0.5 + this.zoom) });
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    const budget = PIXI_THEME.label.budget;
+    for (let i = 0; i < Math.min(budget, candidates.length); i++) {
+      const { node } = candidates[i];
+      this.addLabelSprite(node);
+    }
+  }
+
+  private addLabelSprite(node: LayoutNode): void {
+    let texture = this.labelTextureCache.get(node.label);
+    if (!texture) {
+      const t = new PIXI.Text({
+        text: node.label,
+        style: {
+          fontFamily: PIXI_THEME.label.font,
+          fontSize: PIXI_THEME.label.size,
+          fill: PIXI_THEME.label.fill,
+          dropShadow: { color: 0x000000, blur: 4, distance: 0, alpha: 0.9 },
+        },
+      });
+      texture = this.app.renderer.generateTexture(t);
+      this.labelTextureCache.set(node.label, texture);
+      t.destroy();
+    }
+    const sprite = new PIXI.Sprite(texture);
+    sprite.anchor.set(0.5, 0);
+    const data = this.nodeData.get(node.id);
+    sprite.position.set(data?.x || 0, (data?.y || 0) + 12);
+    this.labelContainer.addChild(sprite);
+    this.labelSprites.set(node.id, sprite);
+  }
+
+  /** Rebuild label sprites after positions settle or camera moves. */
+  private onCameraChanged(): void {
+    this.requestLabelRefresh();
+  }
+
+  /** Frame the whole graph. */
+  fitToBounds(nodes: LayoutNode[]): void {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const n of nodes) {
+      const nx = n.x || 0;
+      const ny = n.y || 0;
+      if (nx < minX) minX = nx;
+      if (nx > maxX) maxX = nx;
+      if (ny < minY) minY = ny;
+      if (ny > maxY) maxY = ny;
+    }
+    if (minX === Number.POSITIVE_INFINITY) return;
+
+    const pad = PIXI_THEME.zoom.fitPad;
+    const graphW = maxX - minX || 1;
+    const graphH = maxY - minY || 1;
+    const zoom = Math.min((this.containerWidth - pad * 2) / graphW, (this.containerHeight - pad * 2) / graphH, 1.5);
+
+    this.zoom = Math.max(PIXI_THEME.zoom.min, zoom);
+    this.viewport.scale.set(this.zoom);
+    this.viewport.position.set(
+      this.containerWidth / 2 - ((minX + maxX) / 2) * this.zoom,
+      this.containerHeight / 2 - ((minY + maxY) / 2) * this.zoom,
+    );
+    this.onCameraChanged();
   }
 
   flyToNode(nodeId: string, nodes: LayoutNode[]): void {
@@ -679,45 +656,63 @@ export class PixiRenderer {
 
     const targetX = node.x || 0;
     const targetY = node.y || 0;
-
     const startX = this.viewport.position.x;
     const startY = this.viewport.position.y;
     const startZoom = this.zoom;
-
-    // Fly camera view target details
     const destX = this.container.clientWidth / 2 - targetX * 1.5;
     const destY = this.container.clientHeight / 2 - targetY * 1.5;
     const destZoom = 1.5;
 
     let progress = 0;
     const animTicker = (ticker: PIXI.Ticker) => {
-      progress += 0.05 * ticker.deltaTime;
+      progress += (0.05 * ticker.deltaTime) * (1000 / PIXI_THEME.dur.fly);
       if (progress >= 1.0) {
         this.viewport.position.set(destX, destY);
         this.zoom = destZoom;
         this.viewport.scale.set(this.zoom);
         this.app.ticker.remove(animTicker);
+        this.onCameraChanged();
       } else {
-        // Smooth cubic easing
         const ease = 1 - (1 - progress) ** 3;
-        const x = startX + (destX - startX) * ease;
-        const y = startY + (destY - startY) * ease;
-        const z = startZoom + (destZoom - startZoom) * ease;
-
-        this.viewport.position.set(x, y);
-        this.zoom = z;
+        this.viewport.position.set(startX + (destX - startX) * ease, startY + (destY - startY) * ease);
+        this.zoom = startZoom + (destZoom - startZoom) * ease;
         this.viewport.scale.set(this.zoom);
       }
       this.requestRender();
     };
-
     this.app.ticker.add(animTicker);
   }
 
+  /** Zoom the camera toward the canvas center by `factor` (>1 in, <1 out). */
+  zoomAt(factor: number): void {    const rect = this.container.getBoundingClientRect();
+    const mx = rect.width / 2;
+    const my = rect.height / 2;
+    const wx = (mx - this.viewport.position.x) / this.zoom;
+    const wy = (my - this.viewport.position.y) / this.zoom;
+    this.zoom = Math.max(PIXI_THEME.zoom.min, Math.min(PIXI_THEME.zoom.max, this.zoom * factor));
+    this.viewport.scale.set(this.zoom);
+    this.viewport.position.set(mx - wx * this.zoom, my - wy * this.zoom);
+    this.onCameraChanged();
+  }
+
+  /** Current camera transform, for overlays (minimap). */
+  getCamera(): { x: number; y: number; zoom: number; width: number; height: number } {
+    return {
+      x: this.viewport.position.x,
+      y: this.viewport.position.y,
+      zoom: this.zoom,
+      width: this.containerWidth,
+      height: this.containerHeight,
+    };
+  }
+
+  /** Reset the camera to frame the whole graph. */
+  resetFit(): void {
+    this.fitToBounds(this.nodesArray);
+  }
+
   requestRender(): void {
-    if (this.app) {
-      this.app.render();
-    }
+    if (this.app) this.app.render();
   }
 
   resize(): void {
@@ -731,6 +726,7 @@ export class PixiRenderer {
 
   dispose(): void {
     if (this.app) {
+      window.removeEventListener("pointermove", this.onPointerMove);
       this.app.destroy(true, { children: true, texture: true });
     }
   }
