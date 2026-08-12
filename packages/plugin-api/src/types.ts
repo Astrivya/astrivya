@@ -17,7 +17,7 @@ export interface CommandDescriptor {
 export interface ToolDescriptor {
   name: string;
   description: string;
-  inputSchema?: object;
+  inputSchema?: Record<string, unknown>;
 }
 
 export interface PluginMetadata {
@@ -67,7 +67,7 @@ export interface CommandPlugin {
 export interface ToolPlugin {
   name: string;
   description: string;
-  inputSchema: object;
+  inputSchema: Record<string, unknown>;
   handle(args: unknown): Promise<{
     content: Array<{ type: string; text: string }>;
     isError?: boolean;

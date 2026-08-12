@@ -45,6 +45,7 @@ export function computeCommunities(
   };
 
   for (const edge of edges) {
+    if (edge.source === edge.target) continue;
     union(edge.source, edge.target);
   }
 
@@ -75,7 +76,12 @@ export function enumerateCommunities(
     if (!byComponent.has(compId)) byComponent.set(compId, { nodeIds: [], internalEdges: 0 });
     byComponent.get(compId)!.nodeIds.push(nodeId);
   }
+  const seen = new Set<string>();
   for (const edge of edges) {
+    if (edge.source === edge.target) continue;
+    const key = edge.source < edge.target ? `${edge.source}\u0000${edge.target}` : `${edge.target}\u0000${edge.source}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const src = assignment.get(edge.source);
     const dst = assignment.get(edge.target);
     if (src !== undefined && src === dst) {

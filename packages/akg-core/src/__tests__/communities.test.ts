@@ -57,4 +57,17 @@ describe("enumerateCommunities", () => {
     expect(components[0].internalEdges).toBe(3);
     expect(components[1].nodeIds).toEqual(expect.arrayContaining(["x", "y"]));
   });
+
+  it("ignores self-loops and parallel edges when counting internal edges", () => {
+    const components = enumerateCommunities(
+      [
+        { source: "a", target: "b" },
+        { source: "b", target: "a" },
+        { source: "a", target: "a" },
+      ],
+      ["a", "b"],
+    );
+    expect(components.length).toBe(1);
+    expect(components[0].internalEdges).toBe(1);
+  });
 });
