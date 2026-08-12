@@ -1,6 +1,6 @@
 {
   "name": "@astrivya/cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Astrivya CLI — local knowledge graph management for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
