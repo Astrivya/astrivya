@@ -98,7 +98,7 @@ describe("MCP server handlers — tools", () => {
 
     const neighbors = storage.getNeighbors(decisionId);
     expect(neighbors.length).toBeGreaterThanOrEqual(1);
-    expect(neighbors.some((n) => n.node.id === "file::package.json")).toBe(true);
+    expect(neighbors.some((n) => n.node.id === "file::src/frontend/package.json")).toBe(true);
   });
 
   it("log_memory creates a memory node with metadata", async () => {
@@ -134,6 +134,10 @@ describe("MCP server handlers — tools", () => {
     expect(result.isError).toBeFalsy();
     const body = parseEnvelope(result);
     expect(Array.isArray(body.data.results)).toBe(true);
+    // FTS (keyword) fallback must work even when no embeddings exist —
+    // retrieve() fuses FTS + semantic + graph, so the seeded chunk matches.
+    expect(body.data.results.length).toBeGreaterThan(0);
+    expect(body.data.results[0].content).toContain("dark mode");
     // Envelope is self-describing: when semantic is unavailable the `note`
     // names the FTS fallback, so an empty array is not misread as "no data".
     if (body.note) {

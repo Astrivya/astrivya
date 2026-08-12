@@ -1,6 +1,46 @@
 import type { SyncGraph } from "../akg-storage";
 import type { AkgChunk, AkgEdge, AkgNode } from "../akg-types";
 
+function toEpochMs(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const t = Date.parse(value);
+    if (!Number.isNaN(t)) return t;
+  }
+  return Date.now();
+}
+
+function toJsonString(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Normalize a remote node (e.g. from a cloud pull, which sends snake_case
+ * keys, ISO-8601 timestamps and JSONB metadata objects) into the local
+ * camelCase + epoch-ms + JSON-string shape used by the engine.
+ */
+export function normalizeRemoteNode(raw: any): AkgNode {
+  const node: AkgNode = {
+    id: String(raw.id ?? raw.ID ?? ""),
+    label: String(raw.label ?? raw.id ?? ""),
+    type: (raw.type ?? "file") as AkgNode["type"],
+    metadata: toJsonString(raw.metadata),
+    createdAt: toEpochMs(raw.createdAt ?? raw.created_at),
+    updatedAt: toEpochMs(raw.updatedAt ?? raw.updated_at),
+  };
+  if (raw.content != null) node.content = String(raw.content);
+  if (raw.sourceFile != null) node.sourceFile = String(raw.sourceFile);
+  if (raw.source_file != null) node.sourceFile = String(raw.source_file);
+  if (raw.community != null) node.community = Number(raw.community);
+  return node;
+}
+
 export function mergeNode(local: AkgNode, remote: AkgNode): AkgNode {
   if (remote.updatedAt > local.updatedAt) return remote;
   if (remote.updatedAt < local.updatedAt) return local;
@@ -42,6 +82,7 @@ export function mergeGraphs(
   nodeConflicts: number;
   edgeConflicts: number;
 } {
+  const remoteNodes = (remote.nodes || []).map(normalizeRemoteNode);
   const localNodes = new Map<string, any>();
   for (const n of local.nodes) localNodes.set(n.id, n);
 
@@ -54,7 +95,7 @@ export function mergeGraphs(
     seenNodes.add(n.id);
   }
 
-  for (const rn of remote.nodes) {
+  for (const rn of remoteNodes) {
     if (seenNodes.has(rn.id)) {
       const ln = localNodes.get(rn.id);
       if (rn.updatedAt !== ln.updatedAt) {

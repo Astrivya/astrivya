@@ -108,12 +108,29 @@ export function registerDoctor(program: Command): void {
       try {
         const storage = new AkgStorage();
         await storage.init(process.cwd());
-        localNodes = storage.getStats().nodes;
-        mcpChecks.push({
-          label: "Local knowledge graph",
-          status: localNodes > 0 ? "pass" : "warn",
-          detail: localNodes > 0 ? `${localNodes} nodes indexed` : "Not indexed yet — run `astrivya akg init`",
-        });
+        const stats = storage.getStats();
+        localNodes = stats.nodes;
+        if (localNodes > 0) {
+          // Staleness: warn when the newest node is older than 30 days.
+          const row = storage.runQuery("SELECT MAX(updated_at) AS m FROM nodes")[0] as
+            | { m?: number | null }
+            | undefined;
+          const newest = typeof row?.m === "number" ? row.m : null;
+          const stale = newest !== null && Date.now() - newest > 30 * 24 * 60 * 60 * 1000;
+          mcpChecks.push({
+            label: "Local knowledge graph",
+            status: stale ? "warn" : "pass",
+            detail: stale
+              ? `${localNodes} nodes indexed, but the graph is stale (30+ days) — run \`astrivya akg reindex\``
+              : `${localNodes} nodes indexed`,
+          });
+        } else {
+          mcpChecks.push({
+            label: "Local knowledge graph",
+            status: "warn",
+            detail: "Not indexed yet — run `astrivya akg init` (or start the MCP server to auto-index)",
+          });
+        }
       } catch {
         mcpChecks.push({ label: "Local knowledge graph", status: "warn", detail: "Could not open akg.db" });
       }

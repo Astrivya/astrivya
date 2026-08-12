@@ -70,8 +70,13 @@ export function registerAtlas(program: Command): void {
 
           try {
             if (pathname === "/api/akg/graph") {
-              const nodes = storage.runQuery("SELECT * FROM nodes;");
-              const edges = storage.runQuery("SELECT * FROM edges;");
+              // Explicit columns only — the nodes table has a `content` TEXT
+              // column holding full file source. `SELECT *` shipped entire file
+              // bodies to the browser on every graph load (10-100x payload).
+              const nodes = storage.runQuery(
+                "SELECT id, label, type, source_file, community, churn_rate, contributor_count, created_at, updated_at FROM nodes;",
+              );
+              const edges = storage.runQuery("SELECT source, target, relation, weight FROM edges;");
               res.writeHead(200);
               res.end(JSON.stringify({ nodes, edges }));
               return;
@@ -161,8 +166,11 @@ export function registerAtlas(program: Command): void {
 
             if (pathname === "/api/akg/search") {
               const q = (url.searchParams.get("q") || "").toLowerCase();
+              // Explicit columns only — same rationale as /api/akg/graph:
+              // the nodes table has a `content` column holding full file
+              // source; SELECT * would ship entire file bodies per hit.
               const nodes = storage.runQuery(
-                "SELECT * FROM nodes WHERE LOWER(label) LIKE ? OR LOWER(id) LIKE ? LIMIT 50;",
+                "SELECT id, label, type, source_file, community, churn_rate, contributor_count, created_at, updated_at FROM nodes WHERE LOWER(label) LIKE ? OR LOWER(id) LIKE ? LIMIT 50;",
                 [`%${q}%`, `%${q}%`],
               );
               res.writeHead(200);

@@ -4,10 +4,6 @@ import * as path from "node:path";
 import {
   AkgQuery,
   type AkgStorage,
-  EMBEDDING_DIM,
-  EMBEDDING_MODEL,
-  GraphTraversal,
-  ImpactAnalyzer,
 } from "@astrivya/akg-core";
 import { API_PATHS, getConfig, syncCall } from "./api";
 import type { ToolPlugin } from "./plugin";
@@ -15,8 +11,6 @@ import { getStatus, readJournal } from "./status";
 
 let storage: AkgStorage | null = null;
 let query: AkgQuery | null = null;
-let _graphTraversal: GraphTraversal | null = null;
-let _impactAnalyzer: ImpactAnalyzer | null = null;
 let workspacePath = "";
 let _toolPlugins: ToolPlugin[] = [];
 
@@ -36,15 +30,28 @@ async function trySync(data: { nodes: any[]; edges?: any[] }) {
   if (!SYNC_KEY && !getConfig().token) return;
   const baseUrl = CLOUD_URL || getConfig().syncUrl;
   const key = SYNC_KEY || getConfig().token;
-  if (!baseUrl || !key) return;
+  const orgId = getConfig().orgId;
+  if (!baseUrl || !key || !orgId) return;
   try {
+    const toNode = (n: any) => ({
+      id: n.id,
+      label: n.label,
+      type: n.type,
+      ...(typeof n.content === "string" ? { content: n.content } : {}),
+      metadata: typeof n.metadata === "string" ? safeParseMetadata(n.metadata) : n.metadata,
+    });
+    const payload = {
+      org_id: orgId,
+      nodes: data.nodes.map(toNode),
+      ...(data.edges?.length ? { edges: data.edges } : {}),
+    };
     await fetch(`${baseUrl}${API_PATHS.AKG_SYNC_PUSH}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(5000),
     });
   } catch {
@@ -52,12 +59,18 @@ async function trySync(data: { nodes: any[]; edges?: any[] }) {
   }
 }
 
+function safeParseMetadata(raw: string): Record<string, unknown> {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
 export function setAkgStorage(s: AkgStorage, wp: string) {
   storage = s;
   workspacePath = wp;
   query = new AkgQuery(s, wp);
-  _graphTraversal = new GraphTraversal(s);
-  _impactAnalyzer = new ImpactAnalyzer(s);
 }
 
 export function setToolPlugins(plugins: ToolPlugin[]) {
@@ -299,24 +312,20 @@ async function teamDigestBlock(): Promise<Record<string, unknown> | undefined> {
 }
 
 /**
- * Cloud semantic search over the org graph. Sends the query embedding when
- * the local embedder produced one, otherwise the server falls back to its
- * keyword search. Returns `{ nodes, mode }`; never throws (cloud is optional).
+ * Cloud keyword search over the org graph. The cloud search endpoint accepts
+ * only a query string (embeddings are not part of its contract), so this
+ * never claims vector mode. Returns `{ nodes, mode }`; never throws.
  */
 async function cloudSearchNodes(
   query: string,
-  embedding: number[] | undefined,
+  _embedding: number[] | undefined,
   limit: number,
 ): Promise<{ nodes: any[]; mode: string }> {
-  const { syncUrl, token } = getConfig();
+  const { syncUrl, token, orgId } = getConfig();
   if (!syncUrl || !token) return { nodes: [], mode: "none" };
   try {
     const body: Record<string, unknown> = { query, limit };
-    if (embedding && embedding.length === EMBEDDING_DIM) {
-      body.embedding = embedding;
-      body.model = EMBEDDING_MODEL;
-      body.dim = EMBEDDING_DIM;
-    }
+    if (orgId) body.org_id = orgId;
     const cloud = await syncCall(API_PATHS.AKG_SYNC_SEARCH, "POST", body);
     return { nodes: cloud.nodes || [], mode: cloud.mode || "keyword" };
   } catch {
@@ -332,7 +341,7 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
   search_memories: async (args) => {
     const q = args?.query || "";
     const limit = args?.limit || 8;
-    const results = await getQuery().semanticSearch(q, limit);
+    const results = await getQuery().retrieve(q, limit);
 
     let cloudNodes: any[] = [];
     let source: "local" | "cloud" = "local";
@@ -355,7 +364,7 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
       }
     }
 
-    const seen = new Set(results.map((r: any) => r.id));
+    const seen = new Set(results.map((r: any) => r.id ?? r.chunkId ?? r.nodeId));
     const merged = [...results, ...cloudNodes.filter((n) => !seen.has(n.id))].slice(0, limit);
 
     const semanticAvailable = await getQuery().semanticAvailable();
@@ -534,9 +543,12 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
     });
 
     if (fileContext) {
+      const rel = workspacePath
+        ? path.relative(workspacePath, path.resolve(workspacePath, fileContext)).replace(/\\/g, "/")
+        : fileContext.replace(/^.*[\\/]/, "");
       s.addEdge({
         source: id,
-        target: `file::${fileContext.replace(/^.*[\\/]/, "")}`,
+        target: `file::${rel}`,
         relation: "documents",
         weight: 1.0,
       });

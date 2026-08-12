@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
+import * as fs from "node:fs";
 import http from "node:http";
+import * as path from "node:path";
 import { AkgStorage } from "@astrivya/akg-core";
+import { AkgEmbedder, AkgIndexer } from "@astrivya/akg-indexer";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -11,6 +14,7 @@ import {
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import envPaths from "env-paths";
 import { getByokProvider, getConfig } from "./api";
 import { handleReadResource, handleToolCall, refreshContextDigest, setAkgStorage, setToolPlugins } from "./handlers";
 import { checkForUpdates, formatBanner, isOptedOut } from "./lib/update-notifier";
@@ -20,6 +24,7 @@ import { RESOURCE_DEFINITIONS, buildToolList } from "./schemas";
 import {
   getStatus,
   initStatus,
+  recordEvent,
   recordServerStop,
   recordSessionEnd,
   recordSessionStart,
@@ -73,6 +78,108 @@ function createServer() {
   return server;
 }
 
+/**
+ * Auto-index the workspace when the graph is empty (or chunk-less), so the
+ * MCP is useful immediately — no manual `astrivya akg init` required.
+ *
+ * Modes (env `ASTRIVYA_AUTO_INDEX`):
+ *   - `full` (default): index files + generate local ONNX embeddings.
+ *   - `fast`: index files only, skip embeddings.
+ *   - `off` (or `ASTRIVYA_NO_AUTO_INDEX=1`): never auto-index.
+ *
+ * A `.astrivya/index.lock` file prevents concurrent servers from indexing the
+ * same workspace at once (stale locks older than 10 minutes are broken).
+ * Indexing is incremental (content-hash based), so re-runs are cheap.
+ */
+async function maybeAutoIndex(storage: AkgStorage, workspacePath: string): Promise<void> {
+  const mode = process.env.ASTRIVYA_AUTO_INDEX || "full";
+  if (mode === "off" || process.env.ASTRIVYA_NO_AUTO_INDEX === "1") {
+    console.error("[Astrivya MCP] Auto-index disabled (ASTRIVYA_AUTO_INDEX=off). Run `astrivya akg init` manually.");
+    return;
+  }
+
+  const stats = storage.getStats();
+  if (stats.nodes > 0 && stats.chunks > 0) return;
+
+  const lockPath = path.join(workspacePath, ".astrivya", "index.lock");
+  try {
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    if (fs.existsSync(lockPath)) {
+      const age = Date.now() - fs.statSync(lockPath).mtimeMs;
+      if (age < 10 * 60 * 1000) {
+        console.error(
+          "[Astrivya MCP] Another process is indexing this workspace (index.lock present). Skipping auto-index.",
+        );
+        return;
+      }
+      fs.unlinkSync(lockPath); // stale lock from a crashed run
+    }
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+
+    console.error(`[Astrivya MCP] Workspace not indexed - auto-indexing (ASTRIVYA_AUTO_INDEX=${mode})...`);
+    const indexer = new AkgIndexer(storage, workspacePath);
+    const result = await indexer.indexWorkspaceDetailed(
+      (ev) => {
+        if (ev.phase === "detect") {
+          console.error(`[Astrivya MCP] ${ev.message ?? "Workspace scanned"}`);
+        } else if (ev.phase === "code" && ev.unitStart && ev.unitName) {
+          const total = ev.unitFilesTotal ? ` (${ev.unitFilesTotal} files)` : "";
+          console.error(`[Astrivya MCP] Indexing ${ev.unitName} [${ev.unitKind ?? "unit"}]${total}...`);
+        } else if (ev.phase === "code" && ev.unitComplete && ev.unitName) {
+          console.error(
+            `[Astrivya MCP] Indexed ${ev.unitName}: ${ev.unitFilesDone ?? 0}/${ev.unitFilesTotal ?? "?"} files, ${ev.chunks ?? 0} chunks total`,
+          );
+        } else if (ev.phase === "agent") {
+          console.error("[Astrivya MCP] Indexing agent activity...");
+        } else if (ev.phase === "todos") {
+          console.error("[Astrivya MCP] Indexing TODO files...");
+        } else if (ev.phase === "save") {
+          console.error("[Astrivya MCP] Saving database...");
+        }
+      },
+      { parallel: false },
+    );
+    console.error(
+      `[Astrivya MCP] Auto-indexed ${result.filesIndexed} files -> ${result.nodesCreated} nodes, ${result.edgesCreated} edges, ${result.chunks} chunks.`,
+    );
+
+    if (mode === "full") {
+      try {
+        const embedder = new AkgEmbedder();
+        const modelsDir = path.join(envPaths("astrivya", { suffix: "" }).config, "models");
+        const emb = await embedder.embedAllChunks(storage, modelsDir, (done, total) => {
+          if (done % 50 === 0 || done === total) console.error(`[Astrivya MCP] Embedding chunks ${done}/${total}...`);
+        });
+        console.error(`[Astrivya MCP] Embedded ${emb.embedded}/${emb.total} chunks.`);
+      } catch (err: unknown) {
+        console.error(
+          `[Astrivya MCP] Embeddings skipped: ${err instanceof Error ? err.message : String(err)} (keyword search still works)`,
+        );
+      }
+    }
+
+    recordEvent(
+      "auto_index",
+      {
+        mode,
+        files: result.filesIndexed,
+        nodes: result.nodesCreated,
+        edges: result.edgesCreated,
+        chunks: result.chunks,
+      },
+      workspacePath,
+    );
+  } catch (err: unknown) {
+    console.error(`[Astrivya MCP] Auto-index failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      // lock already gone — fine
+    }
+  }
+}
+
 async function initAkg(): Promise<string> {
   const workspacePath = process.env.ASTRIVYA_WORKSPACE_PATH || process.cwd();
   const storage = new AkgStorage();
@@ -80,8 +187,9 @@ async function initAkg(): Promise<string> {
   setAkgStorage(storage, workspacePath);
   console.error(`[Astrivya MCP] Local AKG initialized at ${workspacePath}`);
   const stats = storage.getStats();
-  if (stats.nodes === 0) {
-    console.error("[Astrivya MCP] Workspace not yet indexed. Run `astrivya akg init` for richer queries.");
+  if (stats.nodes === 0 || stats.chunks === 0) {
+    console.error("[Astrivya MCP] Workspace not yet indexed - auto-indexing...");
+    await maybeAutoIndex(storage, workspacePath);
   } else {
     console.error(`[Astrivya MCP] AKG has ${stats.nodes} nodes, ${stats.edges} edges, ${stats.chunks} chunks`);
     if (!process.env.ASTRIVYA_TOKEN) {

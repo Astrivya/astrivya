@@ -80,6 +80,11 @@ export function recordServerStop(reason = "shutdown"): void {
   appendEvent("server_stop", { reason, pid: process.pid, uptimeMs: Date.now() - _startedAt });
 }
 
+/** Append a custom event to the journal (e.g. `auto_index`, `embed_*`). */
+export function recordEvent(type: string, data: Record<string, unknown> = {}, workspace?: string): void {
+  appendEvent(type, data, workspace);
+}
+
 /** Current in-memory status of the running server process. */
 export function getStatus(): McpStatusSnapshot {
   return {
@@ -126,12 +131,15 @@ export function readJournal(workspace: string, limit = 100): JournalEvent[] {
   }
 }
 
-function appendEvent(type: string, data: Record<string, unknown>): void {
-  if (!_journalDir) return;
+function appendEvent(type: string, data: Record<string, unknown>, workspace?: string): void {
+  // Fall back to a workspace-derived journal dir when initStatus hasn't run
+  // yet (e.g. auto_index events recorded during startup indexing).
+  const dir = _journalDir || (workspace ? path.join(workspace, ".astrivya", "mcp") : "");
+  if (!dir) return;
   try {
-    fs.mkdirSync(_journalDir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true });
     const event: JournalEvent = { ts: new Date().toISOString(), type, ...data };
-    fs.appendFileSync(path.join(_journalDir, "events.ndjson"), `${JSON.stringify(event)}\n`);
+    fs.appendFileSync(path.join(dir, "events.ndjson"), `${JSON.stringify(event)}\n`);
   } catch {
     // Journal is best-effort; never break the server over a write failure.
   }

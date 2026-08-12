@@ -4,7 +4,10 @@ import { defineConfig } from "tsup";
 const { version } = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
 
 export default defineConfig({
-  entry: { index: "src/index.ts" },
+  entry: {
+    index: "src/index.ts",
+    "workers/index-worker": "../akg-indexer/src/workers/index-worker.ts",
+  },
   format: "cjs",
   platform: "node",
   target: "node20",

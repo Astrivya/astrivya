@@ -36,14 +36,16 @@ This wizard will help you get started in 3 quick steps.
 Press Ctrl+C at any time to skip a step.
 `);
 
-        // Step 1: Index workspace
+        // Step 1: Index workspace (auto-index by default — press Enter = yes)
         console.log("Step 1/3: Index your workspace");
         const skipIndex = !!(options.yes && options.skipIndex);
         const wantIndex = skipIndex
           ? false
           : nonInteractive
             ? true
-            : (await prompt("Index the current directory into the knowledge graph? (Y/n): ")).toLowerCase() !== "n";
+            : (
+                await prompt("Auto-index this workspace into the knowledge graph? [Y/n] (default: yes): ")
+              ).toLowerCase() !== "n";
         if (wantIndex) {
           console.log("  Running: astrivya akg init --index\n");
           if (await runCli("akg init --index")) {

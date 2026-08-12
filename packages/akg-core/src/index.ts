@@ -34,7 +34,8 @@ export {
   RetrievalResult,
 } from "./akg-types";
 export { GraphTraversal, PathResult, TopoSortEntry, TopoSortResult } from "./core/traversal";
-export { AstRelation, RelationshipEngine } from "./core/relationship-engine";
+export { AstRelation, RelationshipEngine, extractRelativeSpecifiers } from "./core/relationship-engine";
+export { CommunityComponent, computeCommunities, enumerateCommunities } from "./core/communities";
 export { ImpactAnalyzer, ImpactReport } from "./core/impact";
 export { mergeChunks, mergeEdges, mergeGraphs, mergeNode } from "./sync/merge";
 export {

@@ -2,8 +2,9 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AkgChunk, AkgStorage } from "@astrivya/akg-core";
+import type { FileIndexResult, IndexProgressEvent, WorkspaceUnit } from "./types";
 
-const SKIP_DIRS = new Set([
+export const SKIP_DIRS = new Set([
   ".git",
   ".hg",
   ".svn",
@@ -62,7 +63,7 @@ const SKIP_EXTENSIONS = new Set([
   ".model",
 ]);
 
-const CODE_EXTENSIONS = new Set([
+export const CODE_EXTENSIONS = new Set([
   ".ts",
   ".tsx",
   ".mts",
@@ -153,6 +154,15 @@ function normRel(rel: string): string {
   return rel.replace(/\\/g, "/");
 }
 
+/** Whether a file name is eligible for indexing (extension + skip rules). */
+export function isIndexableFileName(name: string): boolean {
+  const ext = path.extname(name).toLowerCase();
+  if (!CODE_EXTENSIONS.has(ext)) return false;
+  if (SKIP_EXTENSIONS.has(ext) || name.endsWith(".d.ts")) return false;
+  if (name.endsWith("-lock.json")) return false;
+  return true;
+}
+
 function findSymbolEnd(lines: string[], start: number): number {
   const openIndent = /^\s*/.exec(lines[start])?.[0].length ?? 0;
   for (let j = start + 1; j < Math.min(lines.length, start + 120); j++) {
@@ -182,45 +192,199 @@ export class CodeChunker {
   async indexWorkspace(
     onProgress?: (msg: string) => void,
   ): Promise<{ files: number; chunks: number; symbols: number }> {
-    const out = { files: 0, chunks: 0, symbols: 0 };
-    const seen = new Set<string>();
-
-    const walk = (dir: string) => {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      entries.sort((a, b) => a.name.localeCompare(b.name));
-      for (const entry of entries) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          if (SKIP_DIRS.has(entry.name)) continue;
-          walk(full);
-          continue;
-        }
-        if (!entry.isFile()) continue;
-        const rel = normRel(path.relative(this.workspacePath, full));
-        if (seen.has(rel)) continue;
-        seen.add(rel);
-        if (!this.isIndexable(entry.name)) continue;
-        onProgress?.(`Indexing ${rel}`);
-        try {
-          const res = this.indexFile(full, rel);
-          if (res.indexed) out.files += 1;
-          out.chunks += res.chunks;
-          out.symbols += res.symbols;
-        } catch {
-          // unreadable/binary/locked file - skip
-        }
-      }
+    const unit: WorkspaceUnit = {
+      name: path.basename(this.workspacePath) || this.workspacePath,
+      path: this.workspacePath,
+      kind: "folder",
+      markers: [],
+      fileCount: 0,
+      nestedRepos: [],
     };
+    const res = await this.indexUnits([unit], {
+      saveToDisk: true,
+      onEvent: (ev) => {
+        if (ev.phase === "code" && ev.file) onProgress?.(`Indexing ${ev.file}`);
+      },
+    });
+    onProgress?.(`Indexed ${res.files} files, ${res.chunks} chunks, ${res.symbols} symbols`);
+    return { files: res.files, chunks: res.chunks, symbols: res.symbols };
+  }
 
-    walk(this.workspacePath);
-    this.storage.saveToDisk();
-    onProgress?.(`Indexed ${out.files} files, ${out.chunks} chunks, ${out.symbols} symbols`);
-    return out;
+  /**
+   * Index a set of workspace units (git repos / folders) into the AKG.
+   * Node ids stay workspace-relative, so the graph survives unit renames.
+   * Files whose content didn't change are skipped (incremental re-index).
+   *
+   * @param opts.saveToDisk Persist to disk at the end (default true).
+   * @param opts.onEvent Structured progress callback (per-unit + per-file).
+   * @param opts.skipHashes `file::id -> contentHash` map (from the persisted
+   *   graph) so unchanged files are skipped without DB lookups - used by
+   *   parallel workers which index into a fresh in-memory database.
+   */
+  async indexUnits(
+    units: WorkspaceUnit[],
+    opts: {
+      saveToDisk?: boolean;
+      onEvent?: (ev: IndexProgressEvent) => void;
+      skipHashes?: Map<string, string>;
+    } = {},
+  ): Promise<{
+    files: number;
+    chunks: number;
+    symbols: number;
+    errors: number;
+    perUnit: Array<{ name: string; files: number; chunks: number; symbols: number; errors: number }>;
+  }> {
+    const out = { files: 0, chunks: 0, symbols: 0, errors: 0 };
+    const perUnit: Array<{ name: string; files: number; chunks: number; symbols: number; errors: number }> = [];
+    const seen = new Set<string>();
+    const filesTotal = units.reduce((acc, u) => acc + u.fileCount, 0) || undefined;
+    const filesDone = { count: 0 };
+    const t0 = Date.now();
+
+    const emit = (ev: IndexProgressEvent): void => opts.onEvent?.(ev);
+
+    for (let i = 0; i < units.length; i++) {
+      const unit = units[i];
+      const unitState = { files: 0, chunks: 0, symbols: 0, errors: 0 };
+      const unitWalked = { count: 0 };
+
+      emit({
+        phase: "code",
+        message: `Indexing ${unit.name}...`,
+        unitIndex: i,
+        unitCount: units.length,
+        unitName: unit.name,
+        unitKind: unit.kind,
+        unitStart: true,
+        unitFilesDone: 0,
+        unitFilesTotal: unit.fileCount || undefined,
+        filesDone: filesDone.count,
+        filesTotal,
+        chunks: out.chunks,
+        errors: out.errors,
+        filesPerSec: filesDone.count / Math.max(1, (Date.now() - t0) / 1000),
+        elapsedMs: Date.now() - t0,
+      });
+
+      // Exclude nested git repos from a parent unit's walk - they are indexed as their own units.
+      const skipNested = new Set<string>();
+      for (const other of units) {
+        if (other === unit) continue;
+        if (other.path === unit.path || other.path.startsWith(unit.path + path.sep)) {
+          skipNested.add(other.path);
+        }
+      }
+
+      unitState.errors = this.walkUnit(
+        unit.path,
+        skipNested,
+        seen,
+        filesDone,
+        unitWalked,
+        opts.skipHashes,
+        (rel, res) => {
+          out.files += res.indexed ? 1 : 0;
+          unitState.files += res.indexed ? 1 : 0;
+          out.chunks += res.chunks;
+          unitState.chunks += res.chunks;
+          out.symbols += res.symbols;
+          unitState.symbols += res.symbols;
+          emit({
+            phase: "code",
+            message: `Indexing ${rel}`,
+            unitIndex: i,
+            unitCount: units.length,
+            unitName: unit.name,
+            unitKind: unit.kind,
+            file: rel,
+            unitFilesDone: unitWalked.count,
+            unitFilesTotal: unit.fileCount || undefined,
+            filesDone: filesDone.count,
+            filesTotal,
+            chunks: out.chunks,
+            errors: out.errors,
+            filesPerSec: filesDone.count / Math.max(1, (Date.now() - t0) / 1000),
+            elapsedMs: Date.now() - t0,
+          });
+        },
+      );
+      out.errors += unitState.errors;
+      perUnit.push({ name: unit.name, ...unitState });
+      emit({
+        phase: "code",
+        message: `Indexed ${unit.name}: ${unitState.files} files, ${unitState.chunks} chunks`,
+        unitIndex: i,
+        unitCount: units.length,
+        unitName: unit.name,
+        unitKind: unit.kind,
+        unitComplete: true,
+        unitFilesDone: unitWalked.count,
+        unitFilesTotal: unit.fileCount || undefined,
+        unitErrors: unitState.errors,
+        filesDone: filesDone.count,
+        filesTotal,
+        chunks: out.chunks,
+        errors: out.errors,
+        filesPerSec: filesDone.count / Math.max(1, (Date.now() - t0) / 1000),
+        elapsedMs: Date.now() - t0,
+      });
+    }
+
+    if (opts.saveToDisk !== false) {
+      this.storage.saveToDisk();
+    }
+    return { ...out, perUnit };
+  }
+
+  /**
+   * Recursively walk a unit directory and index every eligible file.
+   * Symlinks are not followed (cycle-safe), unreadable dirs are skipped,
+   * and duplicate relative paths are deduplicated across units.
+   * Returns the number of unreadable directories skipped.
+   */
+  private walkUnit(
+    dir: string,
+    skipDirs: Set<string>,
+    seen: Set<string>,
+    filesDone: { count: number },
+    unitWalked: { count: number },
+    skipHashes: Map<string, string> | undefined,
+    onFile: (rel: string, res: FileIndexResult) => void,
+  ): number {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return 1;
+    }
+    let errors = 0;
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        if (skipDirs.has(full)) continue;
+        errors += this.walkUnit(full, skipDirs, seen, filesDone, unitWalked, skipHashes, onFile);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const rel = normRel(path.relative(this.workspacePath, full));
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      if (!isIndexableFileName(entry.name)) continue;
+      filesDone.count += 1;
+      unitWalked.count += 1;
+      let res: FileIndexResult = { indexed: false, chunks: 0, symbols: 0 };
+      try {
+        res = this.indexFile(full, rel, skipHashes);
+      } catch {
+        // unreadable/binary/locked file - skip
+        res = { indexed: false, chunks: 0, symbols: 0 };
+      }
+      onFile(rel, res);
+    }
+    return errors;
   }
 
   /** Index a single file (used by hooks). Returns per-file counts. */
@@ -232,24 +396,26 @@ export class CodeChunker {
     return this.indexFile(fullPath, rel);
   }
 
-  private isIndexable(name: string): boolean {
-    const ext = path.extname(name).toLowerCase();
-    if (!CODE_EXTENSIONS.has(ext)) return false;
-    if (SKIP_EXTENSIONS.has(ext) || name.endsWith(".d.ts")) return false;
-    if (name.endsWith("-lock.json")) return false;
-    return true;
-  }
-
-  private indexFile(fullPath: string, rel: string): { symbols: number; chunks: number; indexed: boolean } {
+  private indexFile(
+    fullPath: string,
+    rel: string,
+    skipHashes?: Map<string, string>,
+  ): { symbols: number; chunks: number; indexed: boolean } {
     const stat = fs.statSync(fullPath);
     const content = fs.readFileSync(fullPath, "utf-8");
     if (content.length === 0) return { symbols: 0, chunks: 0, indexed: false };
 
     const contentHash = sha1(content);
     const fileId = `file::${rel}`;
-    const existing = this.storage.getNode(fileId);
-    if (existing && existing.contentHash === contentHash) {
-      return { symbols: 0, chunks: 0, indexed: false };
+    if (skipHashes) {
+      if (skipHashes.get(fileId) === contentHash) {
+        return { symbols: 0, chunks: 0, indexed: false };
+      }
+    } else {
+      const existing = this.storage.getNode(fileId);
+      if (existing && existing.contentHash === contentHash) {
+        return { symbols: 0, chunks: 0, indexed: false };
+      }
     }
 
     const now = Math.round(stat.mtimeMs);

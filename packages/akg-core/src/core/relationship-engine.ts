@@ -126,6 +126,30 @@ export function parseTypeScriptAST(filePath: string, content: string): AstRelati
   return result;
 }
 
+/**
+ * Extract relative import/require specifiers from code content. Handles
+ * ES module `import ... from "./x"`, bare `import "./x"`, `export ... from`,
+ * `require("./x")` and dynamic `import("./x")`. Returns only relative
+ * specifiers (./ or ../) that can be resolved against the file's directory.
+ */
+export function extractRelativeSpecifiers(content: string): string[] {
+  const specifiers = new Set<string>();
+  const patterns = [
+    /(?:from|import)\s*\(\s*["'](\.[^"']+)["']\s*\)/g,
+    /from\s+["'](\.[^"']+)["']/g,
+    /import\s*["'](\.[^"']+)["']/g,
+    /require\s*\(\s*["'](\.[^"']+)["']\s*\)/g,
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+      const spec = m[1];
+      if (spec.startsWith("./") || spec.startsWith("../")) specifiers.add(spec);
+    }
+  }
+  return Array.from(specifiers);
+}
+
 export interface GitMetrics {
   ageDays: number;
   lastModifiedEpoch: number;
@@ -240,11 +264,65 @@ export function analyzeGitHistory(workspacePath: string, relativeFilePath: strin
   }
 }
 
+/** Code file extensions that participate in relationship analysis. */
+export const RELATION_CODE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+];
+
+/** Extension candidates tried when resolving a relative import specifier. */
+const IMPORT_CANDIDATE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+
+/** Safety cap on imports edges emitted per file (pathological files). */
+const MAX_IMPORT_EDGES_PER_FILE = 200;
+
+/**
+ * Extract relative import specifiers (e.g. `./foo`, `../bar`) from a JS/TS
+ * file using lightweight regex scanning. Covers ES `import ... from`, side
+ * effect `import "./x"`, re-export `export ... from "./x"`, and CJS
+ * `require("./x")`. Non-relative (bare package) specifiers are ignored.
+ */
+export function extractImportSpecifiers(content: string): string[] {
+  const specs: string[] = [];
+  const re =
+    /(?:import\s+[\s\S]*?from\s+|export\s+[\s\S]*?from\s+|import\s+|require\s*\()\s*['"](\.{1,2}\/[^'"\s]+)['"]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    specs.push(m[1]);
+  }
+  return [...new Set(specs)];
+}
+
 export class RelationshipEngine {
   constructor(
     private storage: AkgStorage,
     private workspacePath: string,
   ) {}
+
+  /**
+   * Resolve a symbol name to a real indexed node id in the given file.
+   * Prefers the given type (e.g. "class" for extends targets), falls back
+   * to any symbol with a matching label. Returns undefined when no node
+   * exists — callers must skip the edge instead of fabricating stubs.
+   */
+  private resolveSymbolId(filePath: string, label: string, preferredType?: string): string | undefined {
+    const rows = this.storage.runQuery(
+      "SELECT id, type FROM nodes WHERE source_file = ? AND label = ? AND type IN ('class', 'interface', 'function');",
+      [filePath, label],
+    );
+    if (preferredType) {
+      const preferred = rows.find((r) => r.type === preferredType);
+      if (preferred) return preferred.id;
+    }
+    const any = rows[0];
+    return any?.id;
+  }
 
   async analyzeCodeRelationships(filePath: string, fileNodeId: string, content: string): Promise<void> {
     const ext = path.extname(filePath).toLowerCase();
@@ -253,55 +331,46 @@ export class RelationshipEngine {
     try {
       const ast = parseTypeScriptAST(filePath, content);
 
-      // Class inheritances
+      // Class inheritances — target ids must resolve to real symbol nodes
       for (const cls of ast.classes) {
-        const classNodeId = `class::${filePath}::${cls.name}`;
+        const classNodeId = this.resolveSymbolId(filePath, cls.name, "class");
+        if (!classNodeId) continue;
         if (cls.extends) {
-          const extendsNodeId = `class::${filePath}::${cls.extends}`; // assume same file fallback
-          this.storage.addEdge({
-            source: classNodeId,
-            target: extendsNodeId,
-            relation: "extends",
-            confidence: 0.8,
-            extractionMethod: "ast",
-          });
-        }
-        if (cls.implements) {
-          for (const impl of cls.implements) {
-            const implNodeId = `interface::${filePath}::${impl}`;
+          const targetId = this.resolveSymbolId(filePath, cls.extends, "class");
+          if (targetId) {
             this.storage.addEdge({
               source: classNodeId,
-              target: implNodeId,
-              relation: "implements",
+              target: targetId,
+              relation: "extends",
               confidence: 0.8,
               extractionMethod: "ast",
             });
           }
         }
+        if (cls.implements) {
+          for (const impl of cls.implements) {
+            const implNodeId = this.resolveSymbolId(filePath, impl, "interface");
+            if (implNodeId) {
+              this.storage.addEdge({
+                source: classNodeId,
+                target: implNodeId,
+                relation: "implements",
+                confidence: 0.8,
+                extractionMethod: "ast",
+              });
+            }
+          }
+        }
       }
 
-      // Calls and Type usages (lexical matching)
-      // Find all functions/classes defined in this file
-      const localSymbols = this.storage.runQuery("SELECT id, label, type FROM nodes WHERE source_file = ?;", [
-        filePath,
-      ]);
-      const symbolMap = new Map<string, (typeof localSymbols)[0]>();
-      for (const sym of localSymbols) {
-        symbolMap.set(sym.label, sym);
-      }
-
+      // Calls and Type usages (lexical matching against real symbols)
       for (const call of ast.calls) {
         const callerParts = call.caller.split("::");
         const callerName = callerParts[callerParts.length - 1];
-        let callerId = fileNodeId;
+        const callerId = this.resolveSymbolId(filePath, callerName) ?? fileNodeId;
 
-        if (symbolMap.has(callerName)) {
-          callerId = symbolMap.get(callerName)!.id;
-        }
-
-        // Check if callee is local
-        if (symbolMap.has(call.callee)) {
-          const calleeId = symbolMap.get(call.callee)!.id;
+        const calleeId = this.resolveSymbolId(filePath, call.callee);
+        if (calleeId) {
           this.storage.addEdge({
             source: callerId,
             target: calleeId,
@@ -315,14 +384,10 @@ export class RelationshipEngine {
       for (const use of ast.uses) {
         const callerParts = use.caller.split("::");
         const callerName = callerParts[callerParts.length - 1];
-        let callerId = fileNodeId;
+        const callerId = this.resolveSymbolId(filePath, callerName) ?? fileNodeId;
 
-        if (symbolMap.has(callerName)) {
-          callerId = symbolMap.get(callerName)!.id;
-        }
-
-        if (symbolMap.has(use.target)) {
-          const targetId = symbolMap.get(use.target)!.id;
+        const targetId = this.resolveSymbolId(filePath, use.target);
+        if (targetId) {
           this.storage.addEdge({
             source: callerId,
             target: targetId,
@@ -335,6 +400,60 @@ export class RelationshipEngine {
     } catch (err: unknown) {
       console.warn(`AST analysis failed for ${filePath}: ${getErrorMessage(err)}`);
     }
+  }
+
+  /**
+   * Extract relative import/require specifiers from a code file and create
+   * `imports` edges between the current file node and the resolved target
+   * file nodes (when both exist in the graph). Powers topological sort and
+   * impact analysis. Returns the number of edges created.
+   */
+  async analyzeImports(filePath: string, fileNodeId: string, content: string): Promise<number> {
+    const specifiers = extractRelativeSpecifiers(content);
+    if (specifiers.length === 0) return 0;
+
+    const fileDir = path.posix.dirname(filePath);
+    const candidates = (spec: string): string[] => {
+      const base = spec.startsWith("./") ? spec : spec.startsWith("../") ? spec : null;
+      if (!base) return [];
+      const resolved = path.posix.normalize(path.posix.join(fileDir, base));
+      if (resolved.startsWith("..") || resolved.startsWith("/")) return [];
+      return [
+        resolved,
+        `${resolved}.ts`,
+        `${resolved}.tsx`,
+        `${resolved}.js`,
+        `${resolved}.jsx`,
+        `${resolved}.mjs`,
+        `${resolved}/index.ts`,
+        `${resolved}/index.tsx`,
+        `${resolved}/index.js`,
+      ];
+    };
+
+    let created = 0;
+    for (const spec of specifiers.slice(0, 200)) {
+      let targetId: string | undefined;
+      for (const candidate of candidates(spec)) {
+        const id = `file::${candidate}`;
+        const exists = this.storage.runQuery("SELECT 1 FROM nodes WHERE id = ? LIMIT 1;", [id]).length > 0;
+        if (exists) {
+          targetId = id;
+          break;
+        }
+      }
+      if (!targetId || targetId === fileNodeId) continue;
+      this.storage.addEdge({
+        source: fileNodeId,
+        target: targetId,
+        relation: "imports",
+        weight: 1,
+        confidence: 0.8,
+        extractionMethod: "regex",
+      });
+      created++;
+    }
+    return created;
   }
 
   async analyzeAuthorship(filePath: string, fileNodeId: string): Promise<void> {

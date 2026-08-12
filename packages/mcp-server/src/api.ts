@@ -14,6 +14,10 @@ function resolveTeamId(): string | undefined {
   return process.env.ASTRIVYA_TEAM_MCP || process.env.ASTRIVYA_TEAM_ID;
 }
 
+function resolveOrgId(): string | undefined {
+  return process.env.ASTRIVYA_ORG_ID || process.env.ASTRIVYA_ORG;
+}
+
 export const API_PATHS = {
   DECISIONS: "/api/decisions",
   BRIEFING_DAILY: (limit?: number) => `/api/briefing/daily${limit ? `?limit=${limit}` : ""}`,
@@ -34,6 +38,7 @@ export function getConfig() {
     token: resolveToken(),
     syncUrl: CLOUD_URL,
     teamId: resolveTeamId(),
+    orgId: resolveOrgId(),
     openaiKey: OPENAI_KEY,
     anthropicKey: ANTHROPIC_KEY,
   };

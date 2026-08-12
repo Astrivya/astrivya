@@ -284,6 +284,42 @@ function formatUptime(seconds: number): string {
   return parts.join(" ");
 }
 
+/**
+ * Cross-platform count of source files newer than the AKG database file.
+ * Replaces the Unix-only `find . -newer ...` invocation so the TUI works on
+ * Windows too. Skips the same paths the indexer ignores.
+ */
+function countStaleFiles(dbPath: string): number {
+  const STALE_EXTS = new Set([".ts", ".js", ".tsx", ".jsx", ".py", ".go", ".md", ".rs", ".java", ".c", ".cpp", ".h"]);
+  const SKIP_DIRS = new Set([".astrivya", "node_modules", ".git", "dist", "out", "coverage", ".next"]);
+  const dbMtime = fs.statSync(dbPath).mtimeMs;
+  let count = 0;
+
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name));
+      } else if (entry.isFile()) {
+        if (!STALE_EXTS.has(path.extname(entry.name).toLowerCase())) continue;
+        try {
+          if (fs.statSync(path.join(dir, entry.name)).mtimeMs > dbMtime) count++;
+        } catch {
+          // unreadable file — skip
+        }
+      }
+    }
+  };
+
+  walk(process.cwd());
+  return count;
+}
+
 async function updateSidebarData() {
   if (telemetryInFlight) return;
   telemetryInFlight = true;
@@ -296,22 +332,40 @@ async function updateSidebarData() {
 
     let diskInfo = { used: "?", total: "?", pct: 0 };
     try {
-      const df = execSync("df -k /", { encoding: "utf-8", timeout: 1000 });
-      const lines = df.trim().split("\n");
-      const last = lines[lines.length - 1];
-      const parts = last.split(/\s+/);
-      if (parts.length >= 5) {
-        const totalKb = Number.parseInt(parts[1], 10);
-        const usedKb = Number.parseInt(parts[2], 10);
-        if (totalKb > 0) {
-          diskInfo = {
-            used: formatBytes(usedKb * 1024),
-            total: formatBytes(totalKb * 1024),
-            pct: Math.round((usedKb / totalKb) * 100),
-          };
-        }
+      // Cross-platform disk usage: fs.statfs works on Windows, Linux and macOS
+      // (Node >= 18.15). Falls back to `df -k /` on POSIX only.
+      const statfs = fs.statfsSync(process.cwd());
+      const totalBytes = statfs.blocks * statfs.bsize;
+      const freeBytes = statfs.bfree * statfs.bsize;
+      const usedBytes = Math.max(0, totalBytes - freeBytes);
+      if (totalBytes > 0) {
+        diskInfo = {
+          used: formatBytes(usedBytes),
+          total: formatBytes(totalBytes),
+          pct: Math.round((usedBytes / totalBytes) * 100),
+        };
       }
-    } catch {}
+    } catch {
+      try {
+        if (os.platform() !== "win32") {
+          const df = execSync("df -k /", { encoding: "utf-8", timeout: 1000 });
+          const lines = df.trim().split("\n");
+          const last = lines[lines.length - 1];
+          const parts = last.split(/\s+/);
+          if (parts.length >= 5) {
+            const totalKb = Number.parseInt(parts[1], 10);
+            const usedKb = Number.parseInt(parts[2], 10);
+            if (totalKb > 0) {
+              diskInfo = {
+                used: formatBytes(usedKb * 1024),
+                total: formatBytes(totalKb * 1024),
+                pct: Math.round((usedKb / totalKb) * 100),
+              };
+            }
+          }
+        }
+      } catch {}
+    }
 
     let batteryPct: number | null = null;
     let batteryCharging = false;
@@ -389,11 +443,7 @@ async function updateSidebarData() {
         if (now - lastStalenessCheck > 30000) {
           lastStalenessCheck = now;
           try {
-            const findOut = execSync(
-              `find . -newer "${dbPath}" -type f \\( -name "*.ts" -o -name "*.js" -o -name "*.tsx" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.md" -o -name "*.rs" -o -name "*.java" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" \\) ! -path "./.astrivya/*" ! -path "./node_modules/*" ! -path "./.git/*" 2>/dev/null`,
-              { cwd: process.cwd(), encoding: "utf-8", timeout: 3000 },
-            );
-            akgStaleFiles = findOut.trim() ? findOut.trim().split("\n").filter(Boolean).length : 0;
+            akgStaleFiles = countStaleFiles(dbPath);
           } catch {
             akgStaleFiles = 0;
           }
@@ -1350,11 +1400,7 @@ async function executeCliCommand(cmd: string, args: string) {
             fileCount = rows[0].cnt;
           } catch {}
           try {
-            const findOut = execSync(
-              `find . -newer "${dbPath}" -type f \\( -name "*.ts" -o -name "*.js" -o -name "*.tsx" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.md" -o -name "*.rs" -o -name "*.java" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" \\) ! -path "./.astrivya/*" ! -path "./node_modules/*" ! -path "./.git/*" 2>/dev/null`,
-              { cwd: process.cwd(), encoding: "utf-8", timeout: 3000 },
-            );
-            staleCount = findOut.trim() ? findOut.trim().split("\n").filter(Boolean).length : 0;
+            staleCount = countStaleFiles(dbPath);
           } catch {}
           storage.close();
         } catch {}

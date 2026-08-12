@@ -5,6 +5,26 @@ import type { AkgChunk, AkgCommunity, AkgEdge, AkgNode } from "./akg-types";
 import { getErrorMessage } from "./errors";
 
 /**
+ * Guess the node type for a node id that does not exist yet (auto-created
+ * stub by {@link AkgStorage.addEdge}). Recognizes the id prefixes used by
+ * the indexer so stubs get meaningful types instead of a blanket "file".
+ */
+function guessStubType(id: string): AkgNode["type"] {
+  if (id.startsWith("dependency::")) return "dependency";
+  if (id.startsWith("person::")) return "person";
+  if (id.startsWith("workspace::")) return "workspace";
+  if (id.startsWith("folder::")) return "folder";
+  if (id.startsWith("class::")) return "class";
+  if (id.startsWith("interface::")) return "interface";
+  if (id.startsWith("function::")) return "function";
+  if (id.startsWith("heading::")) return "document";
+  if (id.startsWith("decision::")) return "adr";
+  if (id.startsWith("memory::")) return "agent_action";
+  if (id.startsWith("task::")) return "task";
+  return "file";
+}
+
+/**
  * SQLite-backed local knowledge graph storage.
  *
  * Manages nodes, edges, chunks (with FTS5 full-text search), 384-dim
@@ -14,6 +34,9 @@ import { getErrorMessage } from "./errors";
 export class AkgStorage {
   private db: any = null;
   private dbPath = "";
+  private autoSaveMode: boolean | number = true;
+  private dirty = false;
+  private autoSaveTimer: NodeJS.Timeout | null = null;
 
   /**
    * Initialize (or open) the AKG database for the given workspace.
@@ -182,9 +205,115 @@ export class AkgStorage {
 
   saveToDisk(): void {
     if (!this.db || !this.dbPath) return;
+    this.dirty = false;
     const data = this.db.export();
     const buffer = Buffer.from(data);
     fs.writeFileSync(this.dbPath, buffer);
+  }
+
+  /**
+   * Control persistence behavior.
+   * - `true`: save to disk on every mutation (default; heavy for big indexes).
+   * - `false`: never auto-save; call {@link saveToDisk} (flush) explicitly.
+   * - `number` (ms): debounced auto-save, at most one flush per interval.
+   */
+  setAutoSave(mode: boolean | number): void {
+    this.autoSaveMode = mode;
+    if (typeof mode === "number" && mode > 0 && !this.autoSaveTimer) {
+      this.autoSaveTimer = setTimeout(() => this.flushAutoSave(), mode);
+      this.autoSaveTimer.unref?.();
+    }
+  }
+
+  private flushAutoSave(): void {
+    this.autoSaveTimer = null;
+    if (!this.dirty) return;
+    const interval = typeof this.autoSaveMode === "number" ? this.autoSaveMode : 2000;
+    if (this.dbPath && this.dirty) this.saveToDisk();
+    if (typeof this.autoSaveMode === "number" && this.autoSaveMode > 0) {
+      this.autoSaveTimer = setTimeout(() => this.flushAutoSave(), interval);
+      this.autoSaveTimer.unref?.();
+    }
+  }
+
+  private maybeSave(): void {
+    if (!this.db || !this.dbPath) return;
+    if (this.autoSaveMode === false) return;
+    if (this.autoSaveMode === true) {
+      this.saveToDisk();
+      return;
+    }
+    this.dirty = true;
+    if (!this.autoSaveTimer) {
+      this.autoSaveTimer = setTimeout(() => this.flushAutoSave(), this.autoSaveMode);
+      this.autoSaveTimer.unref?.();
+    }
+  }
+
+  /**
+   * Initialize a purely in-memory database (schema only, no disk path, no
+   * auto-save). Used by indexer workers that export their result as a buffer.
+   */
+  async initMemory(): Promise<void> {
+    const SQL = await initSqlJs();
+    this.db = new SQL.Database();
+    this.createSchema();
+    this.dbPath = "";
+    this.autoSaveMode = false;
+  }
+
+  /** Export the current database as a portable SQLite buffer. */
+  exportBuffer(): Buffer {
+    if (!this.db) throw new Error("Database not initialized");
+    return Buffer.from(this.db.export());
+  }
+
+  /**
+   * Merge another AKG database buffer into this one. Nodes/chunks use
+   * INSERT OR REPLACE; edges/embeddings/communities/persons/adr-links use
+   * INSERT OR IGNORE (existing rows win). Returns per-table copy counts.
+   */
+  async mergeDatabase(buffer: Buffer): Promise<{ nodes: number; edges: number; chunks: number }> {
+    const SQL = await initSqlJs();
+    const scratch = new SQL.Database(new Uint8Array(buffer));
+    const counts = { nodes: 0, edges: 0, chunks: 0 };
+    const copyTable = (table: string, conflict: "replace" | "ignore"): void => {
+      const cols = this.runQuery(`PRAGMA table_info(${table});`).map((r: any) => r.name);
+      if (cols.length === 0) return;
+      const colList = cols.join(", ");
+      const placeholders = cols.map(() => "?").join(", ");
+      const stmt = scratch.prepare(`SELECT * FROM ${table};`);
+      while (stmt.step()) {
+        const row = stmt.get();
+        const params = row.map((v: unknown) => (v instanceof Uint8Array ? Buffer.from(v) : v));
+        this.run(
+          `INSERT OR ${conflict === "replace" ? "REPLACE" : "IGNORE"} INTO ${table} (${colList}) VALUES (${placeholders});`,
+          params,
+        );
+        if (table === "nodes") counts.nodes++;
+        else if (table === "edges") counts.edges++;
+        else if (table === "chunks") counts.chunks++;
+      }
+      stmt.free();
+    };
+    copyTable("nodes", "replace");
+    copyTable("edges", "ignore");
+    copyTable("chunks", "replace");
+    copyTable("embeddings", "ignore");
+    copyTable("communities", "ignore");
+    copyTable("persons", "ignore");
+    copyTable("adr_links", "ignore");
+    scratch.close();
+    this.maybeSave();
+    return counts;
+  }
+
+  /** Map of `file::` node id -> content hash, used to skip unchanged files across processes. */
+  getFileHashes(): Map<string, string> {
+    const map = new Map<string, string>();
+    const rows = this.runQuery("SELECT id, content_hash FROM nodes WHERE type = 'file' AND content_hash IS NOT NULL;");
+    for (const row of rows) map.set(row.id, row.content_hash);
+    return map;
   }
 
   /** Execute a raw SQL query against the AKG database. */
@@ -266,7 +395,7 @@ export class AkgStorage {
         node.updatedAt,
       ]);
     }
-    this.saveToDisk();
+    this.maybeSave();
   }
 
   /**
@@ -286,11 +415,7 @@ export class AkgStorage {
       this.upsertNode({
         id: edge.source,
         label: getLabel(edge.source),
-        type: edge.source.startsWith("dependency::")
-          ? "dependency"
-          : edge.source.startsWith("person::")
-            ? "person"
-            : "file",
+        type: guessStubType(edge.source),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -301,11 +426,7 @@ export class AkgStorage {
       this.upsertNode({
         id: edge.target,
         label: getLabel(edge.target),
-        type: edge.target.startsWith("dependency::")
-          ? "dependency"
-          : edge.target.startsWith("person::")
-            ? "person"
-            : "file",
+        type: guessStubType(edge.target),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -325,7 +446,7 @@ export class AkgStorage {
       edge.extractionMethod || "regex",
       edge.metadata || null,
     ]);
-    this.saveToDisk();
+    this.maybeSave();
   }
 
   /** Insert or replace a content chunk (FTS-indexed). */
@@ -346,11 +467,15 @@ export class AkgStorage {
       chunk.createdAt,
       chunk.updatedAt,
     ]);
-    this.saveToDisk();
+    this.maybeSave();
   }
 
-  upsertCommunity(community: AkgCommunity): void {
-    const sql = `
+  /** Set the community id on a node (used by the indexer's CC pass). */
+  setCommunity(nodeId: string, community: number): void {
+    this.run("UPDATE nodes SET community = ? WHERE id = ?;", [community, nodeId]);
+  }
+
+  upsertCommunity(community: AkgCommunity): void {    const sql = `
       INSERT OR REPLACE INTO communities (
         id, label, node_count, cohesion, metadata
       ) VALUES (?, ?, ?, ?, ?);
@@ -362,7 +487,7 @@ export class AkgStorage {
       community.cohesion !== undefined ? community.cohesion : null,
       community.metadata || null,
     ]);
-    this.saveToDisk();
+    this.maybeSave();
   }
 
   addPerson(person: { id: string; name?: string; email?: string }): void {
@@ -370,7 +495,7 @@ export class AkgStorage {
       INSERT OR REPLACE INTO persons (id, name, email) VALUES (?, ?, ?);
     `;
     this.run(sql, [person.id, person.name || person.id.replace("person::", ""), person.email || null]);
-    this.saveToDisk();
+    this.maybeSave();
   }
 
   addAdrLink(adrNodeId: string, codeNodeId: string): void {
@@ -378,7 +503,7 @@ export class AkgStorage {
       INSERT OR REPLACE INTO adr_links (adr_node_id, code_node_id) VALUES (?, ?);
     `;
     this.run(sql, [adrNodeId, codeNodeId]);
-    this.saveToDisk();
+    this.maybeSave();
   }
 
   getAdrLinks(adrNodeId: string): string[] {
@@ -393,7 +518,7 @@ export class AkgStorage {
       this.run("DELETE FROM nodes WHERE id = ?;", [node.id]);
     }
     this.run("DELETE FROM chunks WHERE file_path = ?;", [filePath]);
-    this.saveToDisk();
+    this.maybeSave();
   }
 
   /** Look up a single node by its ID. Returns null if not found. */
@@ -548,7 +673,16 @@ export class AkgStorage {
     if (data.nodes) {
       for (const node of data.nodes) {
         try {
-          this.upsertNode(node);
+          const normalized = {
+            ...node,
+            metadata:
+              node.metadata != null && typeof node.metadata !== "string"
+                ? JSON.stringify(node.metadata)
+                : node.metadata,
+            createdAt: typeof node.createdAt === "string" ? Date.parse(node.createdAt) : node.createdAt,
+            updatedAt: typeof node.updatedAt === "string" ? Date.parse(node.updatedAt) : node.updatedAt,
+          };
+          this.upsertNode(normalized);
           merged++;
         } catch {
           conflicts++;
@@ -594,6 +728,11 @@ export class AkgStorage {
   }
 
   close(): void {
+    if (this.autoSaveTimer) {
+      clearTimeout(this.autoSaveTimer);
+      this.autoSaveTimer = null;
+    }
+    if (this.dirty) this.saveToDisk();
     if (this.db) {
       this.db.close();
       this.db = null;

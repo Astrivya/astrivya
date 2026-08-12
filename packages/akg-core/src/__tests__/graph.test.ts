@@ -313,4 +313,44 @@ describe("Merge functions e2e", () => {
     expect(nodeIds).toContain("A");
     expect(nodeIds).toContain("B");
   });
+
+  it("mergeGraphs normalizes cloud snake_case nodes so remote wins on newer updated_at", () => {
+    const local: any = {
+      version: 1,
+      schema: "akg-v1",
+      workspaceId: "ws1",
+      exportedAt: 100,
+      nodes: [{ id: "A", label: "A", type: "file", metadata: "{\"x\":1}", createdAt: 1000, updatedAt: 1000 }],
+      edges: [],
+      chunks: [],
+      communities: [],
+    };
+    const remote: any = {
+      version: 1,
+      schema: "akg-v1",
+      workspaceId: "ws2",
+      exportedAt: 200,
+      nodes: [
+        {
+          id: "A",
+          label: "A (new)",
+          type: "file",
+          metadata: { x: 2 },
+          created_at: "2026-01-02T00:00:00.000Z",
+          updated_at: "2026-01-02T00:00:00.000Z",
+        },
+      ],
+      edges: [],
+      chunks: [],
+      communities: [],
+    };
+    const result = mergeGraphs(local, remote);
+    expect(result.merged.nodes.length).toBe(1);
+    const merged = result.merged.nodes[0];
+    // ISO string parsed to epoch ms, newer than local 1000 -> remote wins
+    expect(merged.label).toBe("A (new)");
+    expect(merged.updatedAt).toBeGreaterThan(1000);
+    // JSONB object metadata stringified, not "[object Object]"
+    expect(merged.metadata).toBe('{"x":2}');
+  });
 });

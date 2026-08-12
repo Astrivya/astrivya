@@ -12,20 +12,20 @@ import { AkgEmbedder, AkgIndexer } from "@astrivya/akg-indexer";
 import type { Command } from "commander";
 import envPaths from "env-paths";
 import { getBaseUrl, getOrgId, getToken } from "../lib/compat";
-import { color, error, getErrorMessage, startSpinner, success, warn } from "../lib/output";
+import { createIndexRenderer } from "../lib/index-progress";
+import { color, error, getErrorMessage, success, warn } from "../lib/output";
 
 /** Generate embeddings for all un-embedded chunks. Returns null if unavailable (FTS-only fallback). */
 async function embedChunks(
   storage: AkgStorage,
   onProgress?: (done: number, total: number) => void,
-): Promise<{ embedded: number; total: number } | null> {
+): Promise<{ embedded: number; total: number; failed: number } | null> {
   try {
     const embedder = new AkgEmbedder();
     const pathsFromEnv = envPaths("astrivya", { suffix: "" });
     const modelsDir = path.join(pathsFromEnv.config, "models");
     return await embedder.embedAllChunks(storage, modelsDir, onProgress);
   } catch (err: unknown) {
-    warn(`Embeddings skipped: ${getErrorMessage(err)} (keyword search still works)`);
     return null;
   }
 }
@@ -106,39 +106,38 @@ export function registerAkg(program: Command): void {
     .command("init [workspacePath]")
     .description("Initialize and index workspace files (code, docs, ADRs, agent logs) into local akg.db")
     .option("--no-embed", "Skip generating vector embeddings locally (ONNX)")
+    .option("--no-parallel", "Index units sequentially (default: adaptive parallel workers)")
     .option("--sync", "Push chunk embeddings to your Astrivya team cloud graph after indexing")
     .action(async (workspacePath, options) => {
       const targetPath = workspacePath ? path.resolve(workspacePath) : process.cwd();
-      const spinner = startSpinner("Initializing local AKG database...");
+      const renderer = createIndexRenderer();
       try {
         const storage = new AkgStorage();
         await storage.init(targetPath);
-        (spinner as any).text = "Walking workspace and indexing files...";
 
         const indexer = new AkgIndexer(storage, targetPath);
-        const result = await indexer.indexWorkspace((msg) => {
-          (spinner as any).text = msg;
+        const result = await indexer.indexWorkspaceDetailed((ev) => renderer.update(ev), {
+          parallel: options.parallel !== false,
         });
 
-        let embResult: { embedded: number; total: number } | null = null;
+        let embResult: { embedded: number; total: number; failed: number } | null = null;
         if (options.embed !== false) {
-          (spinner as any).text = "Generating embeddings (ONNX)...";
-          embResult = await embedChunks(storage, (done, total) => {
-            (spinner as any).text = `Embedding chunks... ${done}/${total} (${Math.round((done / total) * 100)}%)`;
-          });
+          embResult = await embedChunks(storage, (done, total) => renderer.embed(done, total));
         }
 
-        spinner.succeed("AKG database initialized successfully!");
-        const embedMsg = embResult ? ` Embedded ${embResult.embedded}/${embResult.total} chunks.` : "";
-        success(
-          `Indexed ${result.filesIndexed} files -> ${result.nodesCreated} nodes, ${result.edgesCreated} edges, ${result.chunks} chunks.${embedMsg}`,
+        renderer.done(
+          result,
+          embResult
+            ? { embedded: embResult.embedded, embeddedTotal: embResult.total }
+            : options.embed === false
+              ? {}
+              : { embedSkipped: "local ONNX model unavailable" },
         );
         if (options.sync) {
           await pushChunkEmbeddings(storage);
         }
       } catch (err: unknown) {
-        spinner.fail("Failed to initialize AKG database");
-        error(getErrorMessage(err));
+        renderer.fail(getErrorMessage(err));
         process.exit(1);
       }
     });
@@ -219,38 +218,38 @@ export function registerAkg(program: Command): void {
     .command("reindex")
     .description("Incremental index updates for changed files (with embeddings)")
     .option("--no-embed", "Skip generating vector embeddings locally (ONNX)")
+    .option("--no-parallel", "Index units sequentially (default: adaptive parallel workers)")
     .option("--sync", "Push chunk embeddings to your Astrivya team cloud graph after reindexing")
     .action(async (options) => {
       const targetPath = process.cwd();
-      const spinner = startSpinner("Checking for changes...");
+      const renderer = createIndexRenderer();
       try {
         const storage = new AkgStorage();
         await storage.init(targetPath);
 
         const indexer = new AkgIndexer(storage, targetPath);
-        const result = await indexer.indexWorkspace((msg) => {
-          (spinner as any).text = msg;
+        const result = await indexer.indexWorkspaceDetailed((ev) => renderer.update(ev), {
+          parallel: options.parallel !== false,
         });
 
-        let embResult: { embedded: number; total: number } | null = null;
+        let embResult: { embedded: number; total: number; failed: number } | null = null;
         if (options.embed !== false) {
-          (spinner as any).text = "Generating embeddings (ONNX)...";
-          embResult = await embedChunks(storage, (done, total) => {
-            (spinner as any).text = `Embedding chunks... ${done}/${total} (${Math.round((done / total) * 100)}%)`;
-          });
+          embResult = await embedChunks(storage, (done, total) => renderer.embed(done, total));
         }
 
-        spinner.succeed("AKG database reindexed!");
-        const embedMsg = embResult ? ` Embedded ${embResult.embedded}/${embResult.total} chunks.` : "";
-        success(
-          `Indexed ${result.filesIndexed} files -> ${result.nodesCreated} nodes, ${result.edgesCreated} edges, ${result.chunks} chunks.${embedMsg}`,
+        renderer.done(
+          result,
+          embResult
+            ? { embedded: embResult.embedded, embeddedTotal: embResult.total }
+            : options.embed === false
+              ? {}
+              : { embedSkipped: "local ONNX model unavailable" },
         );
         if (options.sync) {
           await pushChunkEmbeddings(storage);
         }
       } catch (err: unknown) {
-        spinner.fail("Failed to reindex AKG");
-        error(getErrorMessage(err));
+        renderer.fail(getErrorMessage(err));
         process.exit(1);
       }
     });
