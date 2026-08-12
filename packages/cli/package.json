@@ -29,9 +29,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@astrivya/akg-core": "^0.1.0",
-    "@astrivya/akg-indexer": "^0.1.0",
-    "@astrivya/plugin-runtime": "^0.1.0",
+    "@astrivya/akg-core": "^0.2.0",
+    "@astrivya/akg-indexer": "^0.2.0",
+    "@astrivya/plugin-runtime": "^0.2.0",
     "@inquirer/prompts": "^7.5.0",
     "@modelcontextprotocol/sdk": "^1.16.0",
     "chalk": "^5.4.1",
