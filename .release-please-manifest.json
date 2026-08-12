@@ -1,8 +1,8 @@
 {
-  "packages/akg-core": "0.1.1",
-  "packages/akg-indexer": "0.1.0",
-  "packages/plugin-api": "0.1.0",
-  "packages/plugin-runtime": "0.1.0",
-  "packages/mcp-server": "0.1.0",
-  "packages/cli": "0.1.0"
+  "packages/akg-core": "0.2.0",
+  "packages/akg-indexer": "0.2.0",
+  "packages/plugin-api": "0.2.0",
+  "packages/plugin-runtime": "0.2.0",
+  "packages/mcp-server": "0.2.0",
+  "packages/cli": "0.2.0"
 }
