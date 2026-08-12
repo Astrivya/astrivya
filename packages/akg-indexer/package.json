@@ -1,6 +1,6 @@
 {
   "name": "@astrivya/akg-indexer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Astrivya Knowledge Graph indexer — parse ADRs, agent logs, todos and embed them into the AKG",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

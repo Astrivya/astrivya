@@ -1,6 +1,6 @@
 {
   "name": "@astrivya/plugin-runtime",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Astrivya Plugin Runtime — lifecycle management for plugins",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
