@@ -128,9 +128,7 @@ export class PixiRenderer {
   /** Bake a small white antialiased circle texture once. */
   private bakeDotTexture(): PIXI.Texture {
     const size = 64;
-    const g = new PIXI.Graphics()
-      .circle(size / 2, size / 2, size / 2 - 1)
-      .fill({ color: 0xffffff, alpha: 1 });
+    const g = new PIXI.Graphics().circle(size / 2, size / 2, size / 2 - 1).fill({ color: 0xffffff, alpha: 1 });
     return this.app.renderer.generateTexture({ target: g, resolution: 2 });
   }
 
@@ -368,8 +366,7 @@ export class PixiRenderer {
       let widthVal: number = theme.width;
 
       const inPath = this.activeMode === "path";
-      const isPathEdge =
-        inPath && this.pathNodeIds.includes(srcId) && this.pathNodeIds.includes(tgtId);
+      const isPathEdge = inPath && this.pathNodeIds.includes(srcId) && this.pathNodeIds.includes(tgtId);
 
       if (this.activeMode === "focus") {
         const isPath = this.highlightedNodeIds.has(srcId) && this.highlightedNodeIds.has(tgtId);
@@ -515,7 +512,9 @@ export class PixiRenderer {
       return;
     }
 
-    const theme = getNodeTheme(id.startsWith("cluster:") ? "cluster" : this.nodesArray.find((n) => n.id === id)?.type || "default");
+    const theme = getNodeTheme(
+      id.startsWith("cluster:") ? "cluster" : this.nodesArray.find((n) => n.id === id)?.type || "default",
+    );
     const isHover = id === this.hoveredNodeId;
     const isSelected = id === this.selectedNodeId;
     const useAccent = isSelected;
@@ -665,7 +664,7 @@ export class PixiRenderer {
 
     let progress = 0;
     const animTicker = (ticker: PIXI.Ticker) => {
-      progress += (0.05 * ticker.deltaTime) * (1000 / PIXI_THEME.dur.fly);
+      progress += 0.05 * ticker.deltaTime * (1000 / PIXI_THEME.dur.fly);
       if (progress >= 1.0) {
         this.viewport.position.set(destX, destY);
         this.zoom = destZoom;
@@ -684,7 +683,8 @@ export class PixiRenderer {
   }
 
   /** Zoom the camera toward the canvas center by `factor` (>1 in, <1 out). */
-  zoomAt(factor: number): void {    const rect = this.container.getBoundingClientRect();
+  zoomAt(factor: number): void {
+    const rect = this.container.getBoundingClientRect();
     const mx = rect.width / 2;
     const my = rect.height / 2;
     const wx = (mx - this.viewport.position.x) / this.zoom;

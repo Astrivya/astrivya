@@ -27,9 +27,9 @@ import {
   type TopoSortResult,
   akgClient,
 } from "./api/akg-client";
+import astrivyaLogo from "./assets/astrivya-logo.webp?inline";
 import { ForceLayout } from "./layout/force-layout";
 import { PixiRenderer } from "./renderer/pixi-renderer";
-import astrivyaLogo from "./assets/astrivya-logo.webp?inline";
 
 const KNOWLEDGE_LAYERS = [
   { name: "Workspace Structure", types: ["workspace", "folder"], color: "#7986d6" },
@@ -604,10 +604,7 @@ function App() {
               <button className="action-btn" onClick={() => triggerFocusModeRef.current(selectedNode.id)}>
                 <Crosshair size={14} /> Focus Neighborhood
               </button>
-              <button
-                className="action-btn danger"
-                onClick={() => triggerImpactModeRef.current(selectedNode.id)}
-              >
+              <button className="action-btn danger" onClick={() => triggerImpactModeRef.current(selectedNode.id)}>
                 <Activity size={14} /> Blast Impact
               </button>
               {isPathSelecting ? (
@@ -749,15 +746,7 @@ function App() {
 // Astrivya app). Inlined as a base64 data URI so the header needs no
 // separate network request.
 function AstrivyaLogo({ size = 22 }: { size?: number }) {
-  return (
-    <img
-      src={astrivyaLogo}
-      width={size}
-      height={size}
-      className="atlas-logo-img"
-      alt="Astrivya logo"
-    />
-  );
+  return <img src={astrivyaLogo} width={size} height={size} className="atlas-logo-img" alt="Astrivya logo" />;
 }
 
 // MiniMap — redraws at ~5fps, dots cached, viewport rect follows camera.
@@ -788,10 +777,10 @@ const MiniMap = memo(function MiniMap({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       // Compute graph bounds
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
+      let minX = Number.POSITIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
       for (const n of nodes) {
         if (n.x === undefined || n.y === undefined) continue;
         if (n.x < minX) minX = n.x;
@@ -836,7 +825,8 @@ const MiniMap = memo(function MiniMap({
         ctx.strokeStyle = "rgba(139,136,255,0.5)";
         ctx.lineWidth = 1;
         ctx.strokeRect(vx, vy, vw, vh);
-      }    };
+      }
+    };
 
     draw();
     const timer = setInterval(draw, 200);

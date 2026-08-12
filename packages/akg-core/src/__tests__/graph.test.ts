@@ -320,7 +320,7 @@ describe("Merge functions e2e", () => {
       schema: "akg-v1",
       workspaceId: "ws1",
       exportedAt: 100,
-      nodes: [{ id: "A", label: "A", type: "file", metadata: "{\"x\":1}", createdAt: 1000, updatedAt: 1000 }],
+      nodes: [{ id: "A", label: "A", type: "file", metadata: '{"x":1}', createdAt: 1000, updatedAt: 1000 }],
       edges: [],
       chunks: [],
       communities: [],

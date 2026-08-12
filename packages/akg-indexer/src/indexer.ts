@@ -1,10 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-  type AkgStorage,
-  RelationshipEngine,
-  enumerateCommunities,
-} from "@astrivya/akg-core";
+import { type AkgStorage, RelationshipEngine, enumerateCommunities } from "@astrivya/akg-core";
 import { AdrParser } from "./adr-parser";
 import { AgentParser } from "./agent-parser";
 import { CodeChunker } from "./code-chunker";
@@ -162,7 +158,11 @@ export class AkgIndexer {
       }
     }
 
-    emit({ phase: "relations", message: "Extracting code relationships, imports and communities...", elapsedMs: Date.now() - t0 });
+    emit({
+      phase: "relations",
+      message: "Extracting code relationships, imports and communities...",
+      elapsedMs: Date.now() - t0,
+    });
     await this.indexRelations(t0, emit);
 
     emit({ phase: "save", message: "Saving database...", elapsedMs: Date.now() - t0 });
@@ -211,10 +211,7 @@ export class AkgIndexer {
    * components community pass. Never throws — each file is best-effort so
    * indexing cannot be broken by analysis failures.
    */
-  private async indexRelations(
-    t0: number,
-    emit: (ev: IndexProgressEvent) => void,
-  ): Promise<void> {
+  private async indexRelations(t0: number, emit: (ev: IndexProgressEvent) => void): Promise<void> {
     const engine = new RelationshipEngine(this.storage, this.workspacePath);
     const files = this.storage.runQuery(
       "SELECT id, source_file FROM nodes WHERE type = 'file' AND source_file IS NOT NULL;",
@@ -245,7 +242,10 @@ export class AkgIndexer {
       target: string;
     }>;
     const nodeRows = this.storage.runQuery("SELECT id FROM nodes;") as Array<{ id: string }>;
-    const components = enumerateCommunities(edgeRows, nodeRows.map((n) => n.id));
+    const components = enumerateCommunities(
+      edgeRows,
+      nodeRows.map((n) => n.id),
+    );
     components.forEach((component, index) => {
       for (const nodeId of component.nodeIds) this.storage.setCommunity(nodeId, index);
       if (component.nodeIds.length >= 2) {
@@ -265,7 +265,6 @@ export class AkgIndexer {
       elapsedMs: Date.now() - t0,
     });
   }
-
 
   async indexFile(filePath: string): Promise<boolean> {
     if (!filePath.endsWith(".md")) return false;

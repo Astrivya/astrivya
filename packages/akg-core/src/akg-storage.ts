@@ -475,7 +475,8 @@ export class AkgStorage {
     this.run("UPDATE nodes SET community = ? WHERE id = ?;", [community, nodeId]);
   }
 
-  upsertCommunity(community: AkgCommunity): void {    const sql = `
+  upsertCommunity(community: AkgCommunity): void {
+    const sql = `
       INSERT OR REPLACE INTO communities (
         id, label, node_count, cohesion, metadata
       ) VALUES (?, ?, ?, ?, ?);

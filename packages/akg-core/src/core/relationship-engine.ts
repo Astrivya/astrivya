@@ -141,8 +141,7 @@ export function extractRelativeSpecifiers(content: string): string[] {
     /require\s*\(\s*["'](\.[^"']+)["']\s*\)/g,
   ];
   for (const re of patterns) {
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) {
+    for (const m of content.matchAll(re)) {
       const spec = m[1];
       if (spec.startsWith("./") || spec.startsWith("../")) specifiers.add(spec);
     }
@@ -265,16 +264,7 @@ export function analyzeGitHistory(workspacePath: string, relativeFilePath: strin
 }
 
 /** Code file extensions that participate in relationship analysis. */
-export const RELATION_CODE_EXTENSIONS = [
-  ".ts",
-  ".tsx",
-  ".mts",
-  ".cts",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".cjs",
-];
+export const RELATION_CODE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
 /** Extension candidates tried when resolving a relative import specifier. */
 const IMPORT_CANDIDATE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
@@ -292,8 +282,7 @@ export function extractImportSpecifiers(content: string): string[] {
   const specs: string[] = [];
   const re =
     /(?:import\s+[\s\S]*?from\s+|export\s+[\s\S]*?from\s+|import\s+|require\s*\()\s*['"](\.{1,2}\/[^'"\s]+)['"]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
+  for (const m of content.matchAll(re)) {
     specs.push(m[1]);
   }
   return [...new Set(specs)];

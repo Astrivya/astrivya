@@ -25,7 +25,14 @@ describe("RelationshipEngine + communities", () => {
     fs.writeFileSync(abs, content);
     const now = Date.now();
     const id = `file::${rel}`;
-    storage.upsertNode({ id, label: path.basename(rel), type: "file", sourceFile: rel, createdAt: now, updatedAt: now });
+    storage.upsertNode({
+      id,
+      label: path.basename(rel),
+      type: "file",
+      sourceFile: rel,
+      createdAt: now,
+      updatedAt: now,
+    });
     storage.upsertNode({
       id: `symbol::${rel}:aa`,
       label: "hello",
@@ -110,7 +117,10 @@ describe("RelationshipEngine + communities", () => {
 
     const edges = storage.runQuery("SELECT source, target FROM edges;");
     const nodes = storage.runQuery("SELECT id FROM nodes;");
-    const assignment = computeCommunities(edges, nodes.map((n) => n.id));
+    const assignment = computeCommunities(
+      edges,
+      nodes.map((n) => n.id),
+    );
     expect(assignment.get("file::a.ts")).toBe(assignment.get("file::b.ts"));
     expect(assignment.get("file::a.ts")).toBeDefined();
   });
