@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/Astrivya/astrivya/compare/akg-core-v0.2.0...akg-core-v0.2.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* dedupe community edge counts, harden plugin-api input schema typing ([6a405fb](https://github.com/Astrivya/astrivya/commit/6a405fb80233114a12848e635dd54492eb03a6b2))
+
 ## [0.2.0](https://github.com/Astrivya/astrivya/compare/akg-core-v0.1.1...akg-core-v0.2.0) (2026-08-12)
 
 
