@@ -28,7 +28,8 @@
     "lint": "biome check packages/",
     "format": "biome format --write packages/",
     "clean": "npx rimraf packages/*/dist node_modules",
-    "release:bootstrap": "bash scripts/publish-bootstrap.sh"
+    "release:bootstrap": "bash scripts/publish-bootstrap.sh",
+    "smoke:cloud": "node scripts/cloud-smoke.mjs"
   },
   "engines": {
     "node": ">=20"
