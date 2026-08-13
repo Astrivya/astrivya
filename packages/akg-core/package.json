@@ -1,6 +1,6 @@
 {
   "name": "@astrivya/akg-core",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Astrivya Knowledge Graph engine — SQLite-embedded, FTS5, vector embeddings, graph traversal, impact analysis, 3-way merge sync",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,7 +11,10 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist/", "README.md"],
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -34,7 +37,14 @@
     "typescript": "^5.0.0",
     "vitest": "^4.1.8"
   },
-  "keywords": ["knowledge-graph", "sqlite", "fts5", "graph-traversal", "impact-analysis", "astrivya"],
+  "keywords": [
+    "knowledge-graph",
+    "sqlite",
+    "fts5",
+    "graph-traversal",
+    "impact-analysis",
+    "astrivya"
+  ],
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"

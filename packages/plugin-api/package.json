@@ -1,6 +1,6 @@
 {
   "name": "@astrivya/plugin-api",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Astrivya Plugin API — shared interfaces for the plugin system",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,7 +11,10 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist/", "README.md"],
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -32,7 +35,10 @@
     "tsup": "^8.5.1",
     "typescript": "^5.0.0"
   },
-  "keywords": ["astrivya", "plugin-api"],
+  "keywords": [
+    "astrivya",
+    "plugin-api"
+  ],
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
