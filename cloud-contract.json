@@ -1,0 +1,31 @@
+{
+  "$comment": "Canonical cloud API contract: every endpoint the published @astrivya/cli, @astrivya/mcp-server, and @astrivya/plugin-runtime packages call against the cloud (api.astrivya.ai). Mirrored 1:1 by the Astrivya-MVP repo's src/lib/cloud-contract.test.ts. {provider} is a placeholder (github|notion|linear).",
+  "endpoints": [
+    { "path": "/api/ide/me", "methods": ["GET"] },
+    { "path": "/api/ide/token", "methods": ["GET", "POST", "DELETE"] },
+    { "path": "/api/credits/balance", "methods": ["GET"] },
+    { "path": "/api/credits/transactions", "methods": ["GET"] },
+    { "path": "/api/briefing/daily", "methods": ["GET"] },
+    { "path": "/api/decisions", "methods": ["GET", "POST"] },
+    { "path": "/api/org", "methods": ["GET", "POST", "PATCH"] },
+    { "path": "/api/team/context", "methods": ["GET"] },
+    { "path": "/api/team/members", "methods": ["GET", "DELETE"] },
+    { "path": "/api/team/invite", "methods": ["GET", "POST"] },
+    { "path": "/api/team/join", "methods": ["POST"] },
+    { "path": "/api/sync/key", "methods": ["POST"] },
+    { "path": "/api/sync/push", "methods": ["POST"] },
+    { "path": "/api/sync/pull", "methods": ["GET"] },
+    { "path": "/api/akg/sync/push", "methods": ["POST"] },
+    { "path": "/api/akg/sync/search", "methods": ["POST"] },
+    { "path": "/api/notifications", "methods": ["GET", "PATCH", "PUT"] },
+    { "path": "/api/tier", "methods": ["GET", "POST"] },
+    { "path": "/api/plugins/manifest", "methods": ["GET"] },
+    { "path": "/api/plugins/discoverable", "methods": ["GET"] },
+    { "path": "/api/connectors/{provider}/auth", "methods": ["GET"] },
+    { "path": "/api/connectors/{provider}/status", "methods": ["GET"] },
+    { "path": "/api/connectors/{provider}/import", "methods": ["POST"] },
+    { "path": "/api/connectors/github/repos", "methods": ["GET"] },
+    { "path": "/api/connectors/notion/pages", "methods": ["GET"] },
+    { "path": "/api/connectors/linear/teams", "methods": ["GET"] }
+  ]
+}
