@@ -17,7 +17,7 @@ import {
 import envPaths from "env-paths";
 import { getByokProvider, getConfig } from "./api";
 import { handleReadResource, handleToolCall, refreshContextDigest, setAkgStorage, setToolPlugins } from "./handlers";
-import { checkForUpdates, formatBanner, isOptedOut } from "./lib/update-notifier";
+import { maybeAutoUpdate } from "./lib/auto-update";
 import { CURRENT_VERSION } from "./lib/version";
 import { loadToolPlugins } from "./plugin";
 import { RESOURCE_DEFINITIONS, buildToolList } from "./schemas";
@@ -203,16 +203,12 @@ async function initAkg(): Promise<string> {
   return workspacePath;
 }
 
-// Non-blocking: checks the npm registry once per day and prints a one-line
-// banner to stderr (stdout is reserved for the MCP stdio protocol channel).
-// Never crashes the server.
+// Non-blocking: with ASTRIVYA_MCP_AUTO_UPDATE=1 newer same-major versions are
+// installed in the background (takes effect on the next client launch);
+// otherwise a one-line update banner is printed to stderr (stdout is reserved
+// for the MCP stdio protocol channel). Never crashes the server.
 function maybePrintUpdateBanner(): void {
-  if (isOptedOut()) return;
-  void checkForUpdates().then((latest) => {
-    if (latest) {
-      console.error(formatBanner(CURRENT_VERSION, latest));
-    }
-  });
+  void maybeAutoUpdate();
 }
 
 async function runStdioServer() {

@@ -20,12 +20,12 @@ import { registerSync } from "./commands/sync";
 import { registerTeam } from "./commands/team";
 import { startTui } from "./commands/tui";
 import { registerUpdate } from "./commands/update";
+import { maybeAutoUpdate, maybeSyncPlugins } from "./lib/auto-update";
 import { setGlobalProgram } from "./lib/command-registry";
 import { getToken, setVerbose } from "./lib/compat";
 import { runRootAction } from "./lib/entry-guard";
 import { color, getErrorMessage, setPrintMode } from "./lib/output";
 import { loadCommandPlugins } from "./lib/plugin";
-import { checkForUpdates, formatBanner, isOptedOut } from "./lib/update-notifier";
 import { CURRENT_VERSION } from "./lib/version";
 
 async function main() {
@@ -61,16 +61,16 @@ Tips:
       if (opts.verbose) setVerbose(true);
       if (opts.print) setPrintMode(true);
     })
-    .hook("postAction", async (thisCommand: Command) => {
+    .hook("preAction", async (thisCommand: Command) => {
       const opts = thisCommand.optsWithGlobals();
       const name = thisCommand.name();
       if (opts.updateCheck === false) return;
       if (name === "update" || thisCommand.parent?.name() === "update") return;
-      if (isOptedOut()) return;
-      const latest = await checkForUpdates();
-      if (latest) {
-        console.log(`\n${formatBanner(CURRENT_VERSION, latest)}\n`);
-      }
+      await maybeAutoUpdate({ skipInstall: name === "mcp-server" });
+    })
+    .hook("postAction", async (thisCommand: Command) => {
+      const opts = thisCommand.optsWithGlobals();
+      await maybeSyncPlugins({ local: opts.local === true });
     })
     .action(() => {
       runRootAction(program, startTui);

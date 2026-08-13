@@ -87,12 +87,15 @@ Monorepo release automation is handled by **release-please** (`.github/release-p
 ## CLI Update Experience
 
 - The bundled CLI carries its real version (injected via `tsup` `define` in `packages/cli/tsup.config.ts`; source of truth `src/lib/version.ts`).
-- A non-blocking update notifier runs after commands and shows a one-line banner **once per new version**; it never crashes the CLI. Opt-outs: `--no-update-check`, `NO_UPDATE_NOTIFIER`, `CI`, or `astrivya update disable`.
-- `astrivya update` checks + installs in one step, auto-detecting the install method (npm/pnpm/yarn/bun/local). Override with `ASTRIVYA_UPDATE_MANAGER`.
+- **Auto-update (2026-08-14)**: at the START of every command the CLI checks the registry (24h throttle, 2.5s fetch timeout) and prompts `Update X → Y now? [y/N]` (30s prompt timeout; TTY only — non-TTY prints the banner). `astrivya config set autoUpdate on` installs silently without prompting; `off` restores banner-only. Never auto-installs `local`/`unknown` installs (source checkouts, npx) or major version jumps (major = banner + explicit `astrivya update`); failed installs back off 24h. The `update` and `mcp-server` commands never trigger it. Logic lives in `src/lib/auto-update.ts` (policy, pure decision `shouldAutoInstall`); `src/lib/update-notifier.ts` stays the pure cache/check layer.
+- **Plugin auto-sync (2026-08-14)**: `maybeSyncPlugins` runs after every command (~24h throttle, `plugin-sync.json` in the cache dir, skip when unauthenticated/`--local`/CI); sha256-verified on the plugin-runtime side, only prints when something changed or failed. Best-effort, never crashes.
+- A non-blocking update notifier prints a one-line banner **once per new version**; it never crashes the CLI. Opt-outs: `--no-update-check`, `NO_UPDATE_NOTIFIER`, `CI`, or `astrivya update disable`.
+- `astrivya update` checks + installs in one step (bypasses the same-major auto-update pin), auto-detecting the install method (npm/pnpm/yarn/bun/local). Override with `ASTRIVYA_UPDATE_MANAGER`.
 
 ## mcp-server Update Notifier
 
 - `@astrivya/mcp-server` checks the npm registry once per day at startup and prints a one-line banner to **stderr** (stdout is the MCP stdio protocol channel). Non-blocking, never crashes.
+- **Auto-update (opt-in, 2026-08-14)**: set `ASTRIVYA_MCP_AUTO_UPDATE=1` to install newer same-major versions in the **background** at startup (`npm install -g @astrivya/mcp-server@latest`, detached). Only for global installs (npm/pnpm/bun global paths); never via npx cache (`_npx`) or local projects. The running process keeps its loaded code — the update takes effect on the next client launch; a `pending` marker in the cache is verified against the running version on the next startup (success/failure is reported, failures back off 24h). Logic in `src/lib/auto-update.ts` (`isGlobalInstall`, `verifyPendingUpdate`).
 - Version injected via tsup `define` (source of truth `src/lib/version.ts`). Opt-outs: `CI`, `NO_UPDATE_NOTIFIER`, `ASTRIVYA_MCP_NO_UPDATE_CHECK`.
 - Cache lives at `envPaths("astrivya-mcp").cache/update.json`; notifies at most once per version.
 

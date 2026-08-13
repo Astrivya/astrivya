@@ -32,6 +32,7 @@ export interface AppConfig {
   teamMcpId?: string;
   role?: string;
   teamName?: string;
+  autoUpdate?: "on" | "prompt" | "off";
 }
 
 let _configCache: AppConfig | null = null;
