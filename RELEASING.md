@@ -54,6 +54,21 @@ node packages/cli/dist/index.js doctor --mcp
 # expect: "N tools served" where N == the count printed by check:docs (18 today)
 ```
 
+Plus, before any release that touches the **cloud plugin flow** (plugin-runtime
+sync/download/load, or the cloud-cli/cloud-mcp plugins served by
+`api.astrivya.ai`), run the cloud smoke against the deployed surface:
+
+```bash
+ASTRIVYA_TOKEN=<real PAT> node scripts/cloud-smoke.mjs            # default api.astrivya.ai
+ASTRIVYA_TOKEN=<real PAT> ASTRIVYA_BASE_URL=https://app.astrivya.ai \
+  node scripts/cloud-smoke.mjs                                     # working MVP cloud
+```
+
+and confirm `plugins sync` installs cloud-cli/cloud-mcp and `astrivya who` /
+`astrivya briefing` return live data (the plugins exercise the exact
+manifest → download → load path users hit). This is the gate that catches a
+stale-global `astrivya-mcp` (RELEASING.md §5) or a broken plugin artifact.
+
 ## 3. Version bump + publish
 
 - Versions and changelogs are driven by **release-please** (Conventional

@@ -1,9 +1,9 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
 
 export interface DownloaderOptions {
@@ -49,6 +49,8 @@ export class PluginDownloader {
         cwd: destDir,
         strip: 1,
       });
+
+      await installPluginDependencies(destDir);
     } finally {
       try {
         await rmSafe(tmpFile);
@@ -89,6 +91,12 @@ async function collectFiles(dir: string): Promise<string[]> {
     const entries = await readdir(join(dir, relativePath));
     for (const entry of entries) {
       const full = relativePath ? `${relativePath}/${entry}` : entry;
+      // node_modules and the install-generated lockfile are byproducts of
+      // auto-installing deps, not part of the shipped artifact — exclude them
+      // so verify() stays stable across reinstalls.
+      if (entry === "node_modules" || entry === "package-lock.json") {
+        continue;
+      }
       const s = await stat(join(dir, full));
       if (s.isDirectory()) {
         await walk(full);
@@ -99,6 +107,60 @@ async function collectFiles(dir: string): Promise<string[]> {
   }
   await walk("");
   return results;
+}
+
+/**
+ * Install a plugin's declared npm dependencies (production only).
+ *
+ * Plugin artifacts ship compiled JS; anything they `import` at runtime must be
+ * resolvable. When the plugin tarball includes a `package.json` with a
+ * `dependencies` block, this runs `npm install --omit=dev` inside the plugin
+ * directory so cloud plugins like cloud-cli/cloud-mcp can load their
+ * `@astrivya/cloud-api` dependency without a manual install.
+ *
+ * No-op when the plugin ships no dependencies or the user opts out with
+ * `ASTRIVYA_PLUGIN_NO_INSTALL=1` (air-gapped/offline installs). Failures throw
+ * so the sync flow reports the plugin as failed rather than installing a
+ * half-working plugin.
+ */
+async function installPluginDependencies(pluginDir: string): Promise<void> {
+  if (process.env.ASTRIVYA_PLUGIN_NO_INSTALL === "1") return;
+
+  const pkgPath = join(pluginDir, "package.json");
+  if (!existsSync(pkgPath)) return;
+
+  let pkg: { dependencies?: Record<string, string> };
+  try {
+    pkg = JSON.parse(await readFile(pkgPath, "utf8"));
+  } catch {
+    return; // malformed manifest — nothing safe to install from
+  }
+  const deps = pkg.dependencies;
+  if (!deps || Object.keys(deps).length === 0) return;
+
+  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+  const child = spawn(npmCmd, ["install", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"], {
+    cwd: pluginDir,
+    shell: process.platform === "win32",
+    windowsHide: true,
+    stdio: "ignore",
+  });
+
+  const timeout = setTimeout(() => {
+    child.kill("SIGTERM");
+  }, 120_000);
+
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", (c) => resolve(c));
+    });
+    if (code !== 0) {
+      throw new Error(`npm install exited with code ${code}`);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function rmSafe(path: string): Promise<void> {

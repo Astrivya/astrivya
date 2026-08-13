@@ -11,6 +11,12 @@ squashed commit on branch `main`. The npm registry already holds the initial
 CI/release-please setup: `NPM_TOKEN` secret set on the repo, org Actions spend
 limit is `$0`. `ci` + `release` workflows listen on both `master` and `main`.
 
+**Git remotes (canonical):** `origin` is `https://github.com/Astrivya/astrivya.git`
+and `main` tracks `origin/main`. The old `amruthjakku/astrivya-oss` fork is
+retained as the `legacy` remote only — never push to it. `main` is a
+protected branch on GitHub: all changes land via PRs against `Astrivya/astrivya`
+(`git push origin <branch>` → open PR → merge), never by direct push to `main`.
+
 ## Structure
 
 ```
