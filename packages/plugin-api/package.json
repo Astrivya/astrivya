@@ -1,6 +1,6 @@
 {
   "name": "@astrivya/plugin-api",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Astrivya Plugin API — shared interfaces for the plugin system",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

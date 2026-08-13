@@ -1,6 +1,6 @@
 {
   "name": "@astrivya/akg-core",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Astrivya Knowledge Graph engine — SQLite-embedded, FTS5, vector embeddings, graph traversal, impact analysis, 3-way merge sync",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

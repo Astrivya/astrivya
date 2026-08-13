@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/Astrivya/astrivya/compare/plugin-runtime-v0.2.1...plugin-runtime-v0.3.0) (2026-08-13)
+
+
+### Features
+
+* **cli:** production hardening — bug fixes, e2e suite, and doc-drift gate ([a6141e9](https://github.com/Astrivya/astrivya/commit/a6141e9a6184caae42c24439bce909911e24ef13))
+
 ## [0.2.1](https://github.com/Astrivya/astrivya/compare/plugin-runtime-v0.2.0...plugin-runtime-v0.2.1) (2026-08-12)
 
 
