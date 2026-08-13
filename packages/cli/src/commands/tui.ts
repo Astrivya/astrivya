@@ -1,24 +1,32 @@
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { AkgQuery, AkgStorage, GraphTraversal } from "@astrivya/akg-core";
 import { AkgIndexer } from "@astrivya/akg-indexer";
-import {
-  executeCommandSafely,
-  getFlatCommandList,
-  getSubCommandMap,
-  hasSubCommands,
-  isPassthroughCommand,
-} from "../lib/command-registry";
+import { executeCommandSafely, isPassthroughCommand } from "../lib/command-registry";
 import { getBaseUrl, getToken, loadConfig, saveConfig } from "../lib/compat";
-import { amber, color } from "../lib/output";
-import { getErrorMessage } from "../lib/output";
+import { amber, color, getErrorMessage } from "../lib/output";
 import { setSessionTitle } from "../lib/repl-input";
 import { RuntimeExecutor } from "../lib/runtime-manager/runtime-executor";
 import { RuntimeManager } from "../lib/runtime-manager/runtime-manager";
 import { getSessionStore } from "../lib/session-store";
+import {
+  type LayoutBudget,
+  type SidebarData,
+  autoCompleteSlash,
+  buildSidebarLines,
+  buildWrapped,
+  chatVersion,
+  countStaleFiles,
+  formatBytes,
+  formatRelativeTime,
+  formatUptime,
+  getFilteredCommands,
+  getLayoutBudget,
+  hasSubCommands,
+} from "../lib/tui-logic";
 
 let inputBuffer = "";
 const chatHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
@@ -81,36 +89,6 @@ function needsTerminalPassthrough(cmd: string, args: string): boolean {
   return cmd === "setup" || cmd === "init" || isUsageLive;
 }
 
-function getFilteredCommands(slashQuery: string): { name: string; description: string }[] {
-  const subCmdMap = getSubCommandMap();
-  const spaceIdx = slashQuery.indexOf(" ");
-  if (spaceIdx > 0) {
-    const parentCmd = slashQuery.slice(0, spaceIdx);
-    const subQuery = slashQuery.slice(spaceIdx + 1);
-    const subs = subCmdMap[parentCmd];
-    if (subs) {
-      const lowerQ = subQuery.toLowerCase();
-      return subs.filter(
-        (c: { name: string; description: string }) =>
-          c.name.includes(lowerQ) || c.description.toLowerCase().includes(lowerQ),
-      );
-    }
-  }
-  const lowerQ = slashQuery.toLowerCase();
-  return getFlatCommandList().filter((c) => c.name.includes(lowerQ) || c.description.toLowerCase().includes(lowerQ));
-}
-
-function autoCompleteSlash(): void {
-  if (!slashActive || !inputBuffer.startsWith("/")) return;
-  const q = inputBuffer.slice(1);
-  const filtered = getFilteredCommands(q);
-  if (filtered.length === 0) return;
-  const selected = filtered[slashSelectedIndex] || filtered[0];
-  inputBuffer = `/${selected.name} `;
-  slashSelectedIndex = 0;
-  slashStartIndex = 0;
-}
-
 async function getAkgQuery() {
   if (akgQuery) return akgQuery;
   akgStorage = new AkgStorage();
@@ -125,51 +103,10 @@ let cachedWrapped: string[] = [];
 let cachedChatVersion = -1;
 let cachedCols = -1;
 
-function chatVersion(): number {
-  let v = chatHistory.length * 2;
-  if (loading) v += 1;
-  return v;
-}
-
-function buildWrapped(cols: number): string[] {
-  const result: string[] = [];
-  const maxW = Math.max(1, cols - 6);
-  for (const msg of chatHistory) {
-    if (msg.role === "user") {
-      for (const line of msg.content.split("\n")) {
-        let rem = line;
-        while (rem.length > 0) {
-          result.push(`${amber("❯")} ${rem.slice(0, maxW)}`);
-          rem = rem.slice(maxW);
-        }
-      }
-    } else {
-      for (const line of msg.content.split("\n")) {
-        let rem = line;
-        while (rem.length > 0) {
-          result.push(rem.slice(0, maxW));
-          rem = rem.slice(maxW);
-        }
-      }
-    }
-  }
-  if (loading) {
-    const s = streamingText || "Thinking...";
-    for (const line of s.split("\n")) {
-      let rem = line;
-      while (rem.length > 0) {
-        result.push(rem.slice(0, maxW));
-        rem = rem.slice(maxW);
-      }
-    }
-  }
-  return result;
-}
-
 function getChatWrapped(cols: number): string[] {
-  const v = chatVersion();
+  const v = chatVersion(chatHistory.length, loading);
   if (v !== cachedChatVersion || cols !== cachedCols) {
-    cachedWrapped = buildWrapped(cols);
+    cachedWrapped = buildWrapped(chatHistory, loading, streamingText, cols);
     cachedChatVersion = v;
     cachedCols = cols;
   }
@@ -177,43 +114,6 @@ function getChatWrapped(cols: number): string[] {
 }
 
 // ── Render regions ──
-
-// ── Render regions ──
-
-interface SidebarData {
-  batteryPct: number | null;
-  batteryCharging: boolean;
-  memoryUsedGb: string;
-  memoryTotalGb: string;
-  memoryPct: number;
-  diskUsed: string;
-  diskTotal: string;
-  diskPct: number;
-  cpuModel: string;
-  cpuCores: number;
-  cpuLoad: string;
-  ollamaStatus: "Online" | "Offline" | "Checking";
-  ollamaModels: string[];
-  dbSize: string;
-  dbNodes: number;
-  dbEdges: number;
-  dbChunks: number;
-  gitBranch: string;
-  gitDirtyFiles: number;
-  uptime: string;
-  akgReady: boolean;
-  akgLastIndexed: string;
-  akgFilesIndexed: number;
-  akgStaleFiles: number;
-  akgNodes: number;
-  akgEdges: number;
-  unreadCount: number;
-  teamMembers: number;
-  teamDecisions: number;
-  teamStandups: number;
-  teamHandoffs: number;
-  memberActivity: { name: string; activityCount: number }[];
-}
 
 let sidebarData: SidebarData = {
   batteryPct: null,
@@ -263,61 +163,20 @@ let akgOnboardingShown = false;
 let sessionPickerSessions: Array<{ id: string; title: string; message_count: number; updated_at: string }> = [];
 let sessionPickerSavedHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
 
-function formatBytes(bytes: number): string {
-  const b = Number(bytes);
-  if (Number.isNaN(b) || b <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(b) / Math.log(1024));
-  if (i < 0 || i >= units.length) return `${b} B`;
-  return `${(b / 1024 ** i).toFixed(1)} ${units[i]}`;
-}
-
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / (3600 * 24));
-  const h = Math.floor((seconds % (3600 * 24)) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-
-  const parts = [];
-  if (d > 0) parts.push(`${d}d`);
-  if (h > 0) parts.push(`${h}h`);
-  if (m > 0 || parts.length === 0) parts.push(`${m}m`);
-  return parts.join(" ");
-}
-
 /**
- * Cross-platform count of source files newer than the AKG database file.
- * Replaces the Unix-only `find . -newer ...` invocation so the TUI works on
- * Windows too. Skips the same paths the indexer ignores.
+ * Run a short-lived command asynchronously. Never blocks the event loop —
+ * the TUI stays responsive even if git or system tools are slow.
  */
-function countStaleFiles(dbPath: string): number {
-  const STALE_EXTS = new Set([".ts", ".js", ".tsx", ".jsx", ".py", ".go", ".md", ".rs", ".java", ".c", ".cpp", ".h"]);
-  const SKIP_DIRS = new Set([".astrivya", "node_modules", ".git", "dist", "out", "coverage", ".next"]);
-  const dbMtime = fs.statSync(dbPath).mtimeMs;
-  let count = 0;
-
-  const walk = (dir: string): void => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name));
-      } else if (entry.isFile()) {
-        if (!STALE_EXTS.has(path.extname(entry.name).toLowerCase())) continue;
-        try {
-          if (fs.statSync(path.join(dir, entry.name)).mtimeMs > dbMtime) count++;
-        } catch {
-          // unreadable file — skip
-        }
+function runCmd(cmd: string, args: string[], timeoutMs = 1000): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { encoding: "utf-8", timeout: timeoutMs, windowsHide: true }, (err, stdout) => {
+      if (err) {
+        resolve("");
+        return;
       }
-    }
-  };
-
-  walk(process.cwd());
-  return count;
+      resolve(stdout);
+    });
+  });
 }
 
 async function updateSidebarData() {
@@ -346,44 +205,40 @@ async function updateSidebarData() {
         };
       }
     } catch {
-      try {
-        if (os.platform() !== "win32") {
-          const df = execSync("df -k /", { encoding: "utf-8", timeout: 1000 });
-          const lines = df.trim().split("\n");
-          const last = lines[lines.length - 1];
-          const parts = last.split(/\s+/);
-          if (parts.length >= 5) {
-            const totalKb = Number.parseInt(parts[1], 10);
-            const usedKb = Number.parseInt(parts[2], 10);
-            if (totalKb > 0) {
-              diskInfo = {
-                used: formatBytes(usedKb * 1024),
-                total: formatBytes(totalKb * 1024),
-                pct: Math.round((usedKb / totalKb) * 100),
-              };
-            }
+      if (os.platform() !== "win32") {
+        const df = await runCmd("df", ["-k", "/"]);
+        const lines = df.trim().split("\n");
+        const last = lines[lines.length - 1];
+        const parts = last.split(/\s+/);
+        if (parts.length >= 5) {
+          const totalKb = Number.parseInt(parts[1], 10);
+          const usedKb = Number.parseInt(parts[2], 10);
+          if (totalKb > 0) {
+            diskInfo = {
+              used: formatBytes(usedKb * 1024),
+              total: formatBytes(totalKb * 1024),
+              pct: Math.round((usedKb / totalKb) * 100),
+            };
           }
         }
-      } catch {}
+      }
     }
 
     let batteryPct: number | null = null;
     let batteryCharging = false;
-    try {
-      if (os.platform() === "darwin") {
-        const out = execSync("pmset -g batt", { encoding: "utf-8", timeout: 1000 });
-        const match = out.match(/(\d+)%;\s*(.+)/);
-        if (match) {
-          batteryPct = Number.parseInt(match[1], 10);
-          batteryCharging = match[2].includes("charging") || match[2].includes("AC");
-        }
-      } else if (os.platform() === "linux") {
-        try {
-          const cap = fs.readFileSync("/sys/class/power_supply/BAT0/capacity", "utf-8");
-          batteryPct = Number.parseInt(cap.trim(), 10);
-        } catch {}
+    if (os.platform() === "darwin") {
+      const out = await runCmd("pmset", ["-g", "batt"]);
+      const match = out.match(/(\d+)%;\s*(.+)/);
+      if (match) {
+        batteryPct = Number.parseInt(match[1], 10);
+        batteryCharging = match[2].includes("charging") || match[2].includes("AC");
       }
-    } catch {}
+    } else if (os.platform() === "linux") {
+      try {
+        const cap = fs.readFileSync("/sys/class/power_supply/BAT0/capacity", "utf-8");
+        batteryPct = Number.parseInt(cap.trim(), 10);
+      } catch {}
+    }
 
     const cpus = os.cpus().length;
     const cpuModel = os.cpus()[0]?.model || "Generic CPU";
@@ -443,7 +298,7 @@ async function updateSidebarData() {
         if (now - lastStalenessCheck > 30000) {
           lastStalenessCheck = now;
           try {
-            akgStaleFiles = countStaleFiles(dbPath);
+            akgStaleFiles = countStaleFiles(process.cwd(), dbPath);
           } catch {
             akgStaleFiles = 0;
           }
@@ -454,22 +309,15 @@ async function updateSidebarData() {
 
     let gitBranch = "unknown";
     let gitDirtyFiles = 0;
-    try {
-      const gitDir = path.join(process.cwd(), ".git");
-      if (fs.existsSync(gitDir)) {
-        gitBranch = execSync("git rev-parse --abbrev-ref HEAD", {
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 1000,
-        }).trim();
-        const status = execSync("git status --porcelain", {
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 1000,
-        }).trim();
-        gitDirtyFiles = status ? status.split("\n").filter(Boolean).length : 0;
-      }
-    } catch {}
+    const gitDir = path.join(process.cwd(), ".git");
+    if (fs.existsSync(gitDir)) {
+      const [branchOut, statusOut] = await Promise.all([
+        runCmd("git", ["rev-parse", "--abbrev-ref", "HEAD"]),
+        runCmd("git", ["status", "--porcelain"]),
+      ]);
+      gitBranch = branchOut.trim() || "unknown";
+      gitDirtyFiles = statusOut ? statusOut.split("\n").filter(Boolean).length : 0;
+    }
 
     // Fetch team KPIs and notification count
     let unreadCount = 0;
@@ -568,80 +416,8 @@ function stopSidebarTimer() {
   }
 }
 
-function makeSidebarBar(pct: number, length = 10): string {
-  const p = Math.min(100, Math.max(0, pct));
-  const filled = Math.round((p / 100) * length);
-  return "█".repeat(filled) + "░".repeat(length - filled);
-}
-
-interface LayoutBudget {
-  headerHeight: number;
-  inputRow: number;
-  footerHeight: number;
-  sepRow: number;
-  chatStartRow: number;
-  chatHeight: number;
-  dropdownSize: number;
-}
-
-function getLayoutBudget(rows: number): LayoutBudget {
-  let headerHeight = 4;
-  if (rows < 12) {
-    headerHeight = 0;
-  } else if (rows < 18) {
-    headerHeight = 2;
-  }
-
-  const inputRow = headerHeight;
-
-  let footerHeight = 2;
-  if (rows < 3) {
-    footerHeight = 0;
-  } else if (rows < 6) {
-    footerHeight = 1;
-  }
-
-  let sepRow = inputRow + 1;
-  let dropdownSize = 0;
-
-  if (slashActive) {
-    const q = inputBuffer.slice(1);
-    const inSub = q.includes(" ");
-    const neededDropdownHeader = inSub ? 1 : 0;
-
-    const hasDropdownGap = rows >= 8;
-    const contentStart = inputRow + (hasDropdownGap ? 2 : 1);
-    const contentEnd = rows - footerHeight - 1;
-    const totalContentRows = contentEnd - contentStart + 1;
-
-    const maxPossibleItems = totalContentRows - neededDropdownHeader;
-    dropdownSize = Math.max(1, Math.min(8, maxPossibleItems));
-    sepRow = contentStart + neededDropdownHeader + dropdownSize;
-  } else {
-    if (rows >= 14) {
-      sepRow = inputRow + 1;
-    } else {
-      sepRow = inputRow + 1;
-    }
-  }
-
-  const chatStartRow = sepRow + 1;
-  const chatEndRow = rows - footerHeight - 1;
-  const chatHeight = Math.max(0, chatEndRow - chatStartRow + 1);
-
-  return {
-    headerHeight,
-    inputRow,
-    footerHeight,
-    sepRow,
-    chatStartRow,
-    chatHeight,
-    dropdownSize,
-  };
-}
-
 function renderHeader(rows: number): void {
-  const budget = getLayoutBudget(rows);
+  const budget = getLayoutBudget(rows, slashActive);
   process.stdout.write("\x1b[?25l");
 
   if (budget.headerHeight === 0) {
@@ -669,7 +445,7 @@ function renderHeader(rows: number): void {
 }
 
 function renderInput(rows: number, cols: number): number {
-  const budget = getLayoutBudget(rows);
+  const budget = getLayoutBudget(rows, slashActive);
   readline.cursorTo(process.stdout, 0, budget.inputRow);
   readline.clearLine(process.stdout, 0);
   process.stdout.write(`  ${amber("❯")} ${inputBuffer}`);
@@ -729,19 +505,6 @@ function renderInput(rows: number, cols: number): number {
   }
 
   return budget.sepRow;
-}
-
-function formatRelativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return "just now";
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  if (day === 1) return "Yesterday";
-  return `${day}d ago`;
 }
 
 function renderSessionPicker(rows: number, cols: number, budget: LayoutBudget): void {
@@ -818,7 +581,7 @@ function renderMemberActivity(rows: number, cols: number, budget: LayoutBudget):
 }
 
 function renderChat(rows: number, cols: number, sepRow: number): void {
-  const budget = getLayoutBudget(rows);
+  const budget = getLayoutBudget(rows, slashActive);
   if (budget.chatHeight <= 0) return;
 
   // Divider
@@ -849,7 +612,7 @@ function renderChat(rows: number, cols: number, sepRow: number): void {
 }
 
 function renderFooter(rows: number, cols: number): void {
-  const budget = getLayoutBudget(rows);
+  const budget = getLayoutBudget(rows, slashActive);
   if (budget.footerHeight === 0) return;
 
   if (budget.footerHeight === 2) {
@@ -883,62 +646,24 @@ function renderSidebar(rows: number, cols: number): void {
   const separatorCol = cols - sidebarWidth - 1;
   const startCol = cols - sidebarWidth;
 
-  const memBar = makeSidebarBar(sidebarData.memoryPct);
-  const diskBar = makeSidebarBar(sidebarData.diskPct);
-  const batteryBar = sidebarData.batteryPct !== null ? makeSidebarBar(sidebarData.batteryPct) : "";
-
-  const teamSection =
-    sidebarData.teamMembers > 0 || sidebarData.teamDecisions > 0
-      ? [
-          `  ${color.bold("TEAM KPIs")}`,
-          `  ${color.dim("─".repeat(28))}`,
-          `  ${color.cyan("\uD83D\uDC65 Members")}  ${sidebarData.teamMembers}`,
-          `  ${color.cyan("\uD83D\uDCCB Decisions")} ${sidebarData.teamDecisions}`,
-          `  ${color.cyan("\uD83D\uDCCA Standups")}  ${sidebarData.teamStandups}`,
-          `  ${color.cyan("\uD83D\uDD04 Handoffs")} ${sidebarData.teamHandoffs}`,
-          "",
-        ]
-      : [];
-
-  const lines: string[] = [
-    ...teamSection,
-    `  ${color.bold("SYSTEM TELEMETRY")}`,
-    `  ${color.dim("─".repeat(28))}`,
-    `  Uptime:   ${sidebarData.uptime}`,
-    `  CPU:      ${sidebarData.cpuCores} cores`,
-    `            Load: ${sidebarData.cpuLoad}`,
-    `  Memory:   [${memBar}] ${sidebarData.memoryPct}%`,
-    `            ${sidebarData.memoryUsedGb}/${sidebarData.memoryTotalGb} GB`,
-    `  Disk:     [${diskBar}] ${sidebarData.diskPct}%`,
-    `            ${sidebarData.diskUsed}/${sidebarData.diskTotal}`,
-    sidebarData.batteryPct !== null
-      ? `  Battery:  [${batteryBar}] ${sidebarData.batteryPct}%${sidebarData.batteryCharging ? " (⚡)" : ""}`
-      : "",
-    "",
-    `  ${color.cyan(color.bold("OFFLINE AI & AKG"))}`,
-    `  ${color.dim("─".repeat(28))}`,
-    `  Ollama:   ${sidebarData.ollamaStatus === "Online" ? color.green("Online") : color.red("Offline")}`,
-    sidebarData.ollamaModels.length > 0
-      ? `  Models:   ${sidebarData.ollamaModels.slice(0, 2).join(", ")}`
-      : "  Models:   None loaded",
-    sidebarData.akgReady
-      ? `  AKG:      ${color.green("✔ Ready")}  ${color.dim(sidebarData.akgLastIndexed)}`
-      : `  AKG:      ${color.yellow("✗ Not init")}  ${color.dim("/akg init")}`,
-    sidebarData.akgFilesIndexed > 0
-      ? `  Indexed:  ${sidebarData.akgFilesIndexed} files${sidebarData.akgStaleFiles > 0 ? color.yellow(`  ${sidebarData.akgStaleFiles} stale`) : ""}`
-      : "",
-    ...(sidebarData.akgStaleFiles > 0
-      ? [`            ${color.yellow(`${sidebarData.akgStaleFiles} files changed since index`)}`]
-      : []),
-    sidebarData.akgNodes > 0
-      ? `  Nodes:    ${sidebarData.akgNodes.toLocaleString()}  ·  Edges:  ${sidebarData.akgEdges.toLocaleString()}`
-      : "",
-    "",
-    `  ${color.cyan(color.bold("GIT CONTEXT"))}`,
-    `  ${color.dim("─".repeat(28))}`,
-    `  Branch:   ${sidebarData.gitBranch}`,
-    `  Status:   ${sidebarData.gitDirtyFiles > 0 ? color.yellow(`${sidebarData.gitDirtyFiles} dirty`) : color.green("Clean")}`,
-  ].filter((l) => l !== undefined);
+  // Recolor the extracted plain-text lines (tui-logic keeps them testable).
+  const lines: string[] = buildSidebarLines(sidebarData).map((line) => {
+    if (line.startsWith("TEAM KPIs")) return `  ${color.bold(line)}`;
+    if (line.startsWith("SYSTEM TELEMETRY")) return `  ${color.bold(line)}`;
+    if (line.startsWith("OFFLINE AI & AKG")) return `  ${color.cyan(color.bold(line))}`;
+    if (line.startsWith("GIT CONTEXT")) return `  ${color.cyan(color.bold(line))}`;
+    if (line.startsWith("─")) return `  ${color.dim(line)}`;
+    if (line.startsWith("Ollama:") && sidebarData.ollamaStatus === "Online")
+      return `  ${line.replace("Online", color.green("Online"))}`;
+    if (line.startsWith("AKG:") && sidebarData.akgReady) return `  ${line.replace("✔ Ready", color.green("✔ Ready"))}`;
+    if (line.startsWith("AKG:") && !sidebarData.akgReady)
+      return `  ${line.replace("✗ Not init", color.yellow("✗ Not init"))}`;
+    if (sidebarData.akgStaleFiles > 0 && line.includes("stale"))
+      return `  ${line.replace(/\d+ stale/, color.yellow(`${sidebarData.akgStaleFiles} stale`))}`;
+    if (line.startsWith("Status:") && sidebarData.gitDirtyFiles > 0)
+      return `  ${line.replace(/\d+ dirty/, color.yellow(`${sidebarData.gitDirtyFiles} dirty`))}`;
+    return `  ${line}`;
+  });
 
   // Loop up to rows - 2 to leave row rows - 1 empty on bottom-right, preventing terminal auto-scrolling
   for (let r = 0; r < rows - 1; r++) {
@@ -967,7 +692,7 @@ function render() {
       const cols = process.stdout.columns || 80;
       const isSidebarExpanded = cols >= 100;
       const leftCols = isSidebarExpanded ? cols - 33 : cols;
-      const budget = getLayoutBudget(rows);
+      const budget = getLayoutBudget(rows, slashActive);
       const sepRow = renderInput(rows, leftCols);
       renderChat(rows, leftCols, sepRow);
       renderFooter(rows, leftCols);
@@ -990,7 +715,7 @@ function renderNow() {
   const cols = process.stdout.columns || 80;
   const isSidebarExpanded = cols >= 100;
   const leftCols = isSidebarExpanded ? cols - 33 : cols;
-  const budget = getLayoutBudget(rows);
+  const budget = getLayoutBudget(rows, slashActive);
   process.stdout.write("\x1b[?25l");
   renderHeader(rows);
   const sepRow = renderInput(rows, leftCols);
@@ -1194,6 +919,10 @@ async function executeCliCommand(cmd: string, args: string) {
     const showAkgProgress = async (msg: string) => {
       if (akgProgressIdx !== null) {
         chatHistory[akgProgressIdx].content = msg;
+        // Content mutated in place — message count is unchanged, so the chat
+        // wrap cache (keyed on count + loading) would serve stale lines.
+        // Invalidate it so the new content actually renders.
+        cachedChatVersion = -1;
       } else {
         chatHistory.push({ role: "assistant", content: msg });
         akgProgressIdx = chatHistory.length - 1;
@@ -1400,7 +1129,7 @@ async function executeCliCommand(cmd: string, args: string) {
             fileCount = rows[0].cnt;
           } catch {}
           try {
-            staleCount = countStaleFiles(dbPath);
+            staleCount = countStaleFiles(process.cwd(), dbPath);
           } catch {}
           storage.close();
         } catch {}
@@ -1724,7 +1453,10 @@ function handleKeypress(str: string, key: readline.Key) {
       const filtered = getFilteredCommands(q);
       const selected = filtered[slashSelectedIndex] || filtered[0];
       if (selected && hasSubCommands(selected.name)) {
-        autoCompleteSlash();
+        const completed = autoCompleteSlash(inputBuffer);
+        if (completed) inputBuffer = completed;
+        slashSelectedIndex = 0;
+        slashStartIndex = 0;
         render();
       }
     } else {

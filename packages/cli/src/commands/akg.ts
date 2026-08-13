@@ -198,7 +198,7 @@ export function registerAkg(program: Command): void {
           console.log(
             `  ${color.green(`[${rank}]`)} ${color.bold(r.filePath)}${loc} (score: ${r.score.toFixed(2)}, source: ${r.source})`,
           );
-          console.log(`  ${color.dim("â”€".repeat(40))}`);
+          console.log(`  ${color.dim("─".repeat(40))}`);
           const snippet = r.content.length > 200 ? `${r.content.slice(0, 200)}...` : r.content;
           console.log(
             snippet
@@ -287,7 +287,7 @@ export function registerAkg(program: Command): void {
         if (report.directlyAffected.length > 0) {
           console.log(color.bold("  Direct Impact (1-hop dependents):"));
           for (const d of report.directlyAffected) {
-            console.log(`    â€¢ [${d.type}] ${color.cyan(d.id)}`);
+            console.log(`    • [${d.type}] ${color.cyan(d.id)}`);
           }
           console.log();
         }
@@ -297,7 +297,7 @@ export function registerAkg(program: Command): void {
           const printLimit = 15;
           const toPrint = report.transitivelyAffected.slice(0, printLimit);
           for (const t of toPrint) {
-            console.log(`    â€¢ [${t.type}] ${color.dim(t.id)}`);
+            console.log(`    • [${t.type}] ${color.dim(t.id)}`);
           }
           if (report.transitivelyAffected.length > printLimit) {
             console.log(`    ... and ${report.transitivelyAffected.length - printLimit} more nodes.`);
@@ -309,7 +309,7 @@ export function registerAkg(program: Command): void {
         if (cycles.length > 0) {
           console.log(`${color.red(color.bold("  Circular Dependency Loops Detected:"))}`);
           for (const c of cycles.slice(0, 5)) {
-            console.log(`    â€¢ ${c.path.join(" âž” ")}`);
+            console.log(`    • ${c.path.join(" ➔ ")}`);
           }
           console.log();
         }
@@ -358,7 +358,7 @@ export function registerAkg(program: Command): void {
           const node = pathResult.nodes[i];
           const edge = pathResult.edges[i];
 
-          const connector = edge ? `  ${color.yellow(`â”€â”€[${edge.relation}]â”€â”€âž”`)}` : "";
+          const connector = edge ? `  ${color.yellow(`──[${edge.relation}]──➔`)}` : "";
           console.log(`    ${color.green(`[${node.type}]`)} ${color.bold(node.label)} (${color.dim(node.id)})`);
           if (connector) console.log(connector);
         }

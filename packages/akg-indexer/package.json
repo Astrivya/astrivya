@@ -11,10 +11,7 @@
     },
     "./package.json": "./package.json"
   },
-  "files": [
-    "dist/",
-    "README.md"
-  ],
+  "files": ["dist/", "README.md"],
   "engines": {
     "node": ">=20"
   },
@@ -43,12 +40,7 @@
     "typescript": "^5.0.0",
     "vitest": "^4.1.8"
   },
-  "keywords": [
-    "knowledge-graph",
-    "indexer",
-    "adr",
-    "astrivya"
-  ],
+  "keywords": ["knowledge-graph", "indexer", "adr", "astrivya"],
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"

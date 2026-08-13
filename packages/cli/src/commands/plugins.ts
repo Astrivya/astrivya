@@ -32,7 +32,8 @@ export function registerPlugins(program: Command): void {
                 : e.state === "disabled"
                   ? "\u25CB"
                   : "?";
-          console.log(`  ${stateIcon} ${e.id} v${e.version} [${e.capabilities.join(", ")}] \u2014 ${e.state}`);
+          const caps = (e.capabilities || []).join(", ");
+          console.log(`  ${stateIcon} ${e.id} v${e.version} [${caps}] \u2014 ${e.state}`);
         }
         console.log();
       } catch (err) {

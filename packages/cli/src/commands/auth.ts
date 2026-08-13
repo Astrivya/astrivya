@@ -81,15 +81,15 @@ export function registerAuth(program: Command): void {
         }
 
         const email = result.profile?.email || "";
-        console.log(`\nâœ“ Authenticated${email ? ` as ${email}` : ""}.`);
+        console.log(`\n✓ Authenticated${email ? ` as ${email}` : ""}.`);
         console.log(`
   Next steps:
-  1. astrivya setup           â†’ Configuration wizard
-  2. astrivya sync github     â†’ Import your repos
-  3. astrivya decision log    â†’ Log your first decision
-  4. astrivya who <topic>     â†’ Discover team expertise
-  5. astrivya context <topic> â†’ Get context on any topic
-  6. Install the VS Code extension â†’ https://astrivya.ai/extension
+  1. astrivya setup           → Configuration wizard
+  2. astrivya sync github     → Import your repos
+  3. astrivya decision log    → Log your first decision
+  4. astrivya who <topic>     → Discover team expertise
+  5. astrivya context <topic> → Get context on any topic
+  6. Install the VS Code extension → https://astrivya.ai/extension
 
   Tip: use \`astrivya s "query"\` as a shortcut for search
 `);
@@ -104,7 +104,7 @@ export function registerAuth(program: Command): void {
     .description("Clear stored authentication")
     .action(() => {
       clearConfig();
-      console.log("âœ“ Logged out. Stored credentials cleared.");
+      console.log("✓ Logged out. Stored credentials cleared.");
     });
 
   auth
@@ -156,7 +156,7 @@ export function registerAuth(program: Command): void {
             process.exit(1);
           }
           saveConfig({ token: options.set });
-          console.log("âœ“ Token validated and saved.");
+          console.log("✓ Token validated and saved.");
           return;
         }
         if (options.refresh) {
@@ -169,7 +169,7 @@ export function registerAuth(program: Command): void {
           const deviceName = `${hn} - CLI`;
           const result = await apiCall("/api/ide/token", "POST", { device_name: deviceName });
           saveConfig({ token: result.token });
-          console.log("âœ“ New token generated and saved.");
+          console.log("✓ New token generated and saved.");
         }
 
         const token = getToken();
@@ -191,7 +191,7 @@ export function registerAuth(program: Command): void {
         if (options.show) {
           console.log(`\n  ${token}\n`);
         } else {
-          const masked = `${token.slice(0, 6)}â€¦${token.slice(-4)}`;
+          const masked = `${token.slice(0, 6)}…${token.slice(-4)}`;
           console.log(`\n  Token: ${masked}`);
           console.log("  Use --show to display the full token or --refresh to generate a new one.\n");
         }

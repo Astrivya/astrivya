@@ -137,7 +137,7 @@ export function registerAtlas(program: Command): void {
 
                   const source = n.direction === "out" ? currId : n.node.id;
                   const target = n.direction === "out" ? n.node.id : currId;
-                  const edgeKey = `${source}âž”${target}âž”${n.relation}`;
+                  const edgeKey = `${source}➔${target}➔${n.relation}`;
 
                   if (!subgraphEdges.has(edgeKey)) {
                     subgraphEdges.set(edgeKey, {
@@ -302,7 +302,7 @@ export function registerAtlas(program: Command): void {
 
       server.listen(port, () => {
         const url = `http://localhost:${port}`;
-        info(`\nðŸš€ ${color.bold("Astrivya Atlas serving active at:")} ${color.cyan(url)}`);
+        info(`\n🚀 ${color.bold("Astrivya Atlas serving active at:")} ${color.cyan(url)}`);
         info(`   Database workspace: ${color.dim(workspacePath)}\n`);
 
         // Start file watcher

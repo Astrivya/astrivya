@@ -35,6 +35,22 @@ async function main() {
     )
     .version(CURRENT_VERSION)
     .showHelpAfterError(true)
+    .addHelpText(
+      "after",
+      `
+Quick start:
+  ${color.cyan("astrivya init")}          One-time wizard: index + health check
+  ${color.cyan("astrivya akg query <q>")} Search your knowledge graph
+  ${color.cyan("astrivya doctor")}        Verify your setup
+  ${color.cyan("astrivya mcp-server")}    Serve MCP to AI agents (npx-free)
+
+Tips:
+  • Run ${color.cyan("astrivya")} with no args for the interactive chat TUI
+  • ${color.cyan("--yes")} makes init non-interactive for CI/agents
+  • ${color.cyan("--print")} strips colors for scripts and logs
+  • ${color.cyan("--json")} on status/mcp/doctor emits machine-readable output
+`,
+    )
     .option("--verbose", "Enable verbose debug logging")
     .option("--print", "Print-friendly output (no colors, clean formatting)")
     .option("--local", "Local-only mode (skip cloud features)")

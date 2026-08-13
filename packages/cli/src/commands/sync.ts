@@ -242,9 +242,12 @@ export function registerSync(program: Command): void {
         process.exit(1);
       }
 
-      const teamId = options.team || (config as any).team_id;
+      // The config schema uses camelCase (teamId/orgId); the old snake_case
+      // `team_id` is never written by any command. Fall back through the
+      // fields team create/join actually persist.
+      const teamId = options.team || config.teamId || config.orgId || (config as any).team_id;
       if (!teamId) {
-        error("Team ID required. Provide --team or set team_id in config.");
+        error("Team ID required. Provide --team or join/create a team first (`astrivya team create|join`).");
         process.exit(1);
       }
 

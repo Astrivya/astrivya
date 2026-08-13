@@ -1,13 +1,156 @@
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AkgStorage } from "@astrivya/akg-core";
 import type { Command } from "commander";
 import { apiCall, getBaseUrl, getToken, loadConfig } from "../lib/compat";
 import { getConfigPath } from "../lib/config";
-import { json as printJson } from "../lib/output";
+import { color, getErrorMessage, json as printJson } from "../lib/output";
 import { CURRENT_VERSION } from "../lib/version";
 import { summarizeMcpJournal } from "./mcp";
 import { ALL_TOOLS, buildMcpServiceEntry, buildOpenCodeEntry } from "./setup";
+
+export interface McpSelfTestResult {
+  ok: boolean;
+  serverName?: string;
+  serverVersion?: string;
+  tools: string[];
+  error?: string;
+}
+
+interface JsonRpcMessage {
+  jsonrpc: string;
+  id?: number;
+  result?: {
+    serverInfo?: { name?: string; version?: string };
+    tools?: Array<{ name: string }>;
+  };
+  error?: { message?: string };
+}
+
+/**
+ * Spawn the real MCP server (via the CLI's own `mcp-server` subcommand — the
+ * verified launcher identity) and complete a JSON-RPC initialize handshake +
+ * tools/list over stdio. Uses its own timer (macOS has no `timeout` binary).
+ * Auto-index and update checks are disabled so the self-test is fast and
+ * side-effect free.
+ */
+// 45s default: the npx fallback can cold-fetch the package on first run
+// (~100+ deps), which exceeds 20s; a warm start resolves in ~1s.
+export function runMcpSelfTest(timeoutMs = 45_000): Promise<McpSelfTestResult> {
+  return new Promise((resolve) => {
+    const cliEntry = process.argv[1] || "astrivya";
+    // Prefer re-executing ourselves when the entry is a JS file (node dist/index.js).
+    // When the CLI is launched through a shell shim, node can't re-run it — fall
+    // back to the published package, which is also exactly what the generated
+    // client configs execute.
+    const isJsEntry = /\.(c?m?js)$/.test(cliEntry);
+    const cmd = isJsEntry ? process.execPath : process.platform === "win32" ? "npx.cmd" : "npx";
+    const args = isJsEntry ? [cliEntry, "mcp-server"] : ["-y", "@astrivya/mcp-server"];
+    // On Windows, .cmd/.bat shims can't be spawned directly — shell: true is
+    // required or npx.cmd fails with EINVAL/ENOENT. Args are constants, so we
+    // join them into a command string for the shell case (avoids DEP0190 and
+    // keeps stderr clean).
+    const useShell = !isJsEntry && process.platform === "win32";
+    let child: ReturnType<typeof spawn>;
+    try {
+      if (useShell) {
+        child = spawn(`${cmd} ${args.map((a) => `\"${a}\"`).join(" ")}`, {
+          cwd: process.cwd(),
+          env: { ...process.env, ASTRIVYA_AUTO_INDEX: "off", NO_UPDATE_NOTIFIER: "1" },
+          stdio: ["pipe", "pipe", "inherit"],
+          shell: true,
+        });
+      } else {
+        child = spawn(cmd, args, {
+          cwd: process.cwd(),
+          env: { ...process.env, ASTRIVYA_AUTO_INDEX: "off", NO_UPDATE_NOTIFIER: "1" },
+          stdio: ["pipe", "pipe", "inherit"],
+        });
+      }
+    } catch (err: unknown) {
+      resolve({ ok: false, tools: [], error: `Could not spawn MCP server: ${getErrorMessage(err)}` });
+      return;
+    }
+
+    // Swallow EPIPE — if the server dies before we write, an unhandled stream
+    // error would crash the parent doctor process.
+    child.stdin?.on("error", () => {});
+    child.stdout?.on("error", () => {});
+
+    let stdoutBuf = "";
+    let settled = false;
+    let initialized = false;
+    let serverName: string | undefined;
+    let serverVersion: string | undefined;
+
+    const finish = (result: McpSelfTestResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      finish({ ok: false, tools: [], error: "MCP server handshake timed out" });
+    }, timeoutMs);
+
+    child.on("error", (err) => {
+      finish({ ok: false, tools: [], error: `MCP server failed to start: ${err.message}` });
+    });
+
+    child.on("exit", (code) => {
+      if (!settled) {
+        finish({
+          ok: false,
+          tools: [],
+          error: `MCP server exited early (code ${code}) before completing the handshake`,
+        });
+      }
+    });
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutBuf += chunk.toString("utf8");
+      const lines = stdoutBuf.split("\n");
+      stdoutBuf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let msg: JsonRpcMessage;
+        try {
+          msg = JSON.parse(line) as JsonRpcMessage;
+        } catch {
+          continue;
+        }
+        if (msg.id === 1 && msg.result) {
+          serverName = msg.result.serverInfo?.name || "astrivya-mcp-server";
+          serverVersion = msg.result.serverInfo?.version;
+          initialized = true;
+          child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+          child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+        } else if (msg.id === 2 && msg.result?.tools) {
+          const tools = msg.result.tools.map((t) => t.name).sort();
+          finish({ ok: true, serverName, serverVersion, tools });
+        } else if (msg.error && !initialized) {
+          finish({ ok: false, tools: [], error: msg.error.message || "initialize rejected" });
+        }
+      }
+    });
+
+    child.stdin?.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "astrivya-doctor", version: CURRENT_VERSION },
+        },
+      })}\n`,
+    );
+  });
+}
 
 interface Check {
   label: string;
@@ -34,7 +177,28 @@ export function registerDoctor(program: Command): void {
     .description("Run health checks on your Astrivya setup")
     .option("--fix", "Attempt to fix issues automatically")
     .option("--json", "Output raw JSON")
+    .option("--mcp", "Run only the MCP server self-test (spawn + initialize + tools/list)")
     .action(async (options) => {
+      // Dedicated self-test: spawn the real server and list its tools.
+      if (options.mcp) {
+        console.log("\n  Astrivya MCP Self-Test");
+        console.log(`  ${"═".repeat(30)}`);
+        const result = await runMcpSelfTest();
+        if (result.ok) {
+          console.log(
+            `  \u2713 MCP server boots: ${result.serverName}${result.serverVersion ? ` v${result.serverVersion}` : ""}`,
+          );
+          console.log("  \u2713 initialize handshake OK");
+          console.log(`  \u2713 ${result.tools.length} tools served:`);
+          for (const t of result.tools) console.log(`      - ${t}`);
+          console.log();
+          process.exit(0);
+        }
+        console.log(`  \u2717 ${result.error || "MCP server self-test failed"}`);
+        console.log(`  Run ${color.cyan("`astrivya mcp-server`")} manually to see server output.\n`);
+        process.exit(1);
+      }
+
       const sections: Array<{ title: string; checks: Check[] }> = [];
 
       if (!options.json) {
@@ -101,7 +265,23 @@ export function registerDoctor(program: Command): void {
 
       // ── MCP Server ──────────────────────────────────────
       const mcpChecks: Check[] = [];
-      mcpChecks.push({ label: `@astrivya/cli v${CURRENT_VERSION}`, status: "pass" });
+      // Real boot check: spawn the server and complete the handshake. This is
+      // what catches a broken launcher config — the old check was a hardcoded
+      // unconditional pass that never started the server.
+      const selfTest = await runMcpSelfTest();
+      if (selfTest.ok) {
+        mcpChecks.push({
+          label: "MCP server boots + handshake",
+          status: "pass",
+          detail: `${selfTest.serverName || "astrivya-mcp-server"}${selfTest.serverVersion ? ` v${selfTest.serverVersion}` : ""}, ${selfTest.tools.length} tools served`,
+        });
+      } else {
+        mcpChecks.push({
+          label: "MCP server boots + handshake",
+          status: "fail",
+          detail: selfTest.error || "could not complete initialize handshake",
+        });
+      }
 
       // Check the local knowledge graph (the real backing of local search)
       let localNodes = 0;
@@ -182,11 +362,11 @@ export function registerDoctor(program: Command): void {
               const cfg = tool.readConfig();
               if (tool.name === "OpenCode") {
                 const mcpSection = (cfg as any).mcp || {};
-                mcpSection.astrivya = buildOpenCodeEntry(apiUrl);
+                mcpSection.astrivya = buildOpenCodeEntry(apiUrl, undefined, undefined, token);
                 (cfg as any).mcp = mcpSection;
               } else {
                 const servers = (cfg as any).mcpServers || {};
-                servers.astrivya = buildMcpServiceEntry(apiUrl);
+                servers.astrivya = buildMcpServiceEntry(apiUrl, undefined, undefined, token);
                 (cfg as any).mcpServers = servers;
               }
               tool.writeConfig(cfg);

@@ -23,3 +23,12 @@ package-lock.json binary
 
 # Generated files
 dist/** linguist-generated=true
+
+# Force LF on checkout for biome-checked sources (biome and .editorconfig
+# require LF; without this, Windows checkouts re-introduce CRLF and
+# `npm run lint` fails on format checks)
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf

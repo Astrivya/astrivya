@@ -1,6 +1,6 @@
 # @astrivya/mcp-server
 
-**Model Context Protocol server** for the Astrivya Knowledge Graph. Provides 15 tools that any MCP-compatible client (Claude Desktop, Cursor, Cline, VS Code with Continue, etc.) can use to read, write, and search your local knowledge graph.
+**Model Context Protocol server** for the Astrivya Knowledge Graph. Provides 18 tools that any MCP-compatible client (Claude Desktop, Cursor, Cline, VS Code with Continue, etc.) can use to read, write, and search your local knowledge graph.
 
 ```sh
 npm install -g @astrivya/mcp-server
@@ -65,6 +65,9 @@ Add to `~/.continue/config.json`:
 | `get_team_analytics` | `team_id?` | (Requires Astrivya Cloud API) |
 | `list_notifications` | `unread?`, `type?`, `limit?` | (Requires Astrivya Cloud API) |
 | `mark_notification_read` | `notification_id?` | (Requires Astrivya Cloud API) |
+| `check_credits` | — | Live credit balance, lifetime usage, recent transactions (cloud; fails gracefully offline) |
+| `get_context_digest` | `limit?` | Compact pre-digested context for session start (prose) |
+| `get_workspace_updates` | `since?`, `limit?` | Knowledge-graph changes since a timestamp (delta) |
 
 > Cloud-requiring tools gracefully fall back to local AKG stats when the cloud API is unavailable.
 

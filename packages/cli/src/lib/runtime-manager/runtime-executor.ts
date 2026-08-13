@@ -48,7 +48,7 @@ export class RuntimeExecutor {
           }
 
           activeRuntime = nextRuntime;
-          console.warn(`  ${color.green("â†’")} Switched to ${activeRuntime.name} automatically.\n`);
+          console.warn(`  ${color.green("→")} Switched to ${activeRuntime.name} automatically.\n`);
         } else {
           throw new Error(`Local AI query failed after fallback attempts. Original error: ${getErrorMessage(err)}`);
         }

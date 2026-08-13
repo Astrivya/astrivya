@@ -100,8 +100,9 @@ export function registerCredits(program: Command): void {
           return;
         }
 
+        const limit = Math.max(1, Math.min(500, Number.parseInt(options.limit, 10) || 20));
         spinner = startSpinner("Fetching transaction history...");
-        const txs: any[] = await apiCall(`/api/credits/transactions?limit=${options.limit || 20}`, "GET");
+        const txs: any[] = await apiCall(`/api/credits/transactions?limit=${limit}`, "GET");
         spinner.stop();
 
         if (options.json) {

@@ -1,17 +1,24 @@
 import { execSync } from "node:child_process";
+import * as fs from "node:fs";
 import { resolve } from "node:path";
 import type { Command } from "commander";
 import { color, error as printError, success } from "../lib/output";
 
+/**
+ * Locate install-git-hooks.js by filesystem existence, never by `require()`.
+ * The script runs install/uninstall from its top-level code based on argv, so
+ * requiring it here would silently install hooks as a side effect of merely
+ * resolving the path (e.g. `astrivya hooks status` would install hooks).
+ */
 function getHookScriptPath(): string {
-  const localPath = resolve(__dirname, "../../scripts/install-git-hooks.js");
-  const distPath = resolve(__dirname, "../scripts/install-git-hooks.js");
-  try {
-    require(localPath);
-    return localPath;
-  } catch {
-    return distPath;
+  const candidates = [
+    resolve(__dirname, "../../scripts/install-git-hooks.js"), // src layout
+    resolve(__dirname, "../scripts/install-git-hooks.js"), // dist layout
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
   }
+  throw new Error("install-git-hooks.js not found — is the CLI installed correctly?");
 }
 
 export function registerHooks(program: Command): void {

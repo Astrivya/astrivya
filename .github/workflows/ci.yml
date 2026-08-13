@@ -24,4 +24,12 @@ jobs:
       - run: npm run build:all
       - run: npm run typecheck
       - run: npm run test
+      # Spawns the real built CLI in isolated temp workspaces: help/config,
+      # the full AKG lifecycle, git hooks, sync/team/plugins/credits flows, and
+      # the interactive TUI slash-autocomplete. Blocks merges on CLI regressions.
+      - name: CLI e2e
+        run: npm -w packages/cli run test:e2e
+        timeout-minutes: 10
+      # Fails when documented MCP tool counts/tables drift from schemas.ts
+      - run: npm run check:docs
       - run: npm audit --omit=dev --audit-level=high

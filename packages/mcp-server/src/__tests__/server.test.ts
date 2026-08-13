@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AkgStorage } from "@astrivya/akg-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { handleReadResource, handleToolCall, setAkgStorage } from "../handlers";
 
 function createTempDir(): string {
@@ -224,11 +224,20 @@ describe("MCP server handlers — tools", () => {
   });
 
   it("check_credits reports cloud-not-configured in local mode", async () => {
-    const result = await handleToolCall("check_credits", {});
-    expect(result.isError).toBeFalsy();
-    const body = parseEnvelope(result);
-    expect(body.data.error).toContain("Not connected to cloud");
-    expect(body.note).toContain("Cloud not configured");
+    // Machine/CI environments may set ASTRIVYA_TOKEN (or ASTRIVYA_API_KEY),
+    // which would route check_credits to a real cloud call instead of the
+    // local-mode branch. Stub them away for this one test (vitest restores).
+    vi.stubEnv("ASTRIVYA_TOKEN", "");
+    vi.stubEnv("ASTRIVYA_API_KEY", "");
+    try {
+      const result = await handleToolCall("check_credits", {});
+      expect(result.isError).toBeFalsy();
+      const body = parseEnvelope(result);
+      expect(body.data.error).toContain("Not connected to cloud");
+      expect(body.note).toContain("Cloud not configured");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("get_expertise_profile falls back to local node type counts", async () => {

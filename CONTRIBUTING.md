@@ -31,8 +31,15 @@ astrivya/
 
 1. Fork the repo and create a feature branch
 2. Add tests for your changes
-3. Run `npm run typecheck && npm run build:all && npm test`
+3. Run `npm run typecheck && npm run build:all && npm test` — and, if you
+   touched the MCP server or any doc that lists its tools,
+   `npm run check:docs` (fails when the documented tool surface drifts from
+   `CORE_TOOL_DEFINITIONS` in `packages/mcp-server/src/schemas.ts`)
 4. Open a PR with a clear description of what you changed and why
+
+> Maintainers: before a release, follow the checklist in
+> [RELEASING.md](RELEASING.md) — it covers the publish gates, dependency
+> order, and post-publish verification of the published MCP server.
 5. If you haven't before, agree to the [Contributor License Agreement](CLA.md) —
    comment on your PR with `I agree to the [Astrivya CLA] for this and all
    future contributions.` A maintainer will label it `cla-signed`.

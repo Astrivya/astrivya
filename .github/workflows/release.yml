@@ -69,6 +69,11 @@ jobs:
       - name: Run typecheck
         run: npm run typecheck
 
+      # Last gate before anything hits npm: abort if the documented MCP tool
+      # surface (README, package.json, SKILL copies) drifted from schemas.ts.
+      - name: Verify MCP doc/tool-surface drift
+        run: npm run check:docs
+
       - name: Publish released packages in dependency order
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -24,6 +24,7 @@
     "build:all:with-atlas": "npm run build:all",
     "typecheck": "npm -w packages/akg-core run typecheck && npm -w packages/akg-indexer run typecheck && npm -w packages/plugin-api run typecheck && npm -w packages/plugin-runtime run typecheck && npm -w packages/mcp-server run typecheck && npm -w packages/cli run typecheck",
     "test": "npm -w packages/akg-core run test && npm -w packages/akg-indexer run test && npm -w packages/mcp-server run test && npm -w packages/cli run test",
+    "check:docs": "node scripts/check-mcp-doc-drift.mjs",
     "lint": "biome check packages/",
     "format": "biome format --write packages/",
     "clean": "npx rimraf packages/*/dist node_modules",

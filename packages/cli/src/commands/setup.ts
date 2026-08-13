@@ -36,7 +36,7 @@ export function commandExists(name: string): boolean {
   }
 }
 
-// â”€â”€ Claude Code â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â€”€â”€â”€â”€â”€â€”€â”€â”€â”€â€”€â€”€â€”€â”€â”€â€”€â
+// ── Claude Code ───────────────────────────────────────────────────
 const claudeCode: ToolDetector = {
   name: "Claude Code",
   detect: () => commandExists("claude"),
@@ -55,7 +55,7 @@ const claudeCode: ToolDetector = {
   },
 };
 
-// â”€â”€ Cursor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Cursor ───────────────────────────────────────────────────
 const cursor: ToolDetector = {
   name: "Cursor",
   detect: () => {
@@ -82,7 +82,7 @@ const cursor: ToolDetector = {
   },
 };
 
-// â”€â”€ OpenCode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── OpenCode ─────────────────────────────────────────────────
 const opencode: ToolDetector = {
   name: "OpenCode",
   detect: () => commandExists("opencode"),
@@ -102,7 +102,7 @@ const opencode: ToolDetector = {
   },
 };
 
-// â”€â”€ Claude Desktop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Claude Desktop ───────────────────────────────────────────
 function claudeDesktopConfigDir(): string {
   if (process.platform === "darwin") {
     return path.join(os.homedir(), "Library", "Application Support", "Claude");
@@ -131,7 +131,7 @@ const claudeDesktop: ToolDetector = {
   },
 };
 
-// â”€â”€ Windsurf â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Windsurf ─────────────────────────────────────────────────
 const windsurf: ToolDetector = {
   name: "Windsurf",
   detect: () => {
@@ -155,11 +155,16 @@ const windsurf: ToolDetector = {
 
 const ALL_TOOLS = [claudeCode, cursor, opencode, claudeDesktop, windsurf];
 
-function buildMcpServiceEntry(apiUrl: string, provider?: string, apiKey?: string): McpConfigEntry {
+function buildMcpServiceEntry(apiUrl: string, provider?: string, apiKey?: string, token?: string): McpConfigEntry {
   const env: Record<string, string> = {
     ASTRIVYA_BASE_URL: apiUrl,
-    ASTRIVYA_TOKEN: "${ASTRIVYA_TOKEN}",
   };
+  // Only emit ASTRIVYA_TOKEN when one is actually configured. The `${VAR}`
+  // interpolation is client-dependent (Claude Desktop vs Cursor vs Windsurf
+  // expand it differently), and for local-first setups it is unnecessary.
+  if (token) {
+    env.ASTRIVYA_TOKEN = "${ASTRIVYA_TOKEN}";
+  }
   if (provider && apiKey) {
     const keyVar = provider === "anthropic" ? "ASTRIVYA_ANTHROPIC_KEY" : "ASTRIVYA_OPENAI_KEY";
     env[keyVar] = apiKey;
@@ -167,11 +172,19 @@ function buildMcpServiceEntry(apiUrl: string, provider?: string, apiKey?: string
   return { command: "npx", args: ["-y", "@astrivya/mcp-server"], env };
 }
 
-function buildOpenCodeEntry(apiUrl: string, provider?: string, apiKey?: string): Record<string, unknown> {
+function buildOpenCodeEntry(
+  apiUrl: string,
+  provider?: string,
+  apiKey?: string,
+  token?: string,
+): Record<string, unknown> {
   const environment: Record<string, string> = {
     ASTRIVYA_BASE_URL: apiUrl,
-    ASTRIVYA_TOKEN: "{env:ASTRIVYA_TOKEN}",
   };
+  // Same as buildMcpServiceEntry — omit the interpolation when there is no token.
+  if (token) {
+    environment.ASTRIVYA_TOKEN = "{env:ASTRIVYA_TOKEN}";
+  }
   if (provider && apiKey) {
     const keyVar = provider === "anthropic" ? "ASTRIVYA_ANTHROPIC_KEY" : "ASTRIVYA_OPENAI_KEY";
     environment[keyVar] = apiKey;
@@ -308,11 +321,11 @@ export function registerSetup(program: Command): void {
 
               if (tool.name === "OpenCode") {
                 const mcpSection = (existing as any).mcp || {};
-                mcpSection.astrivya = buildOpenCodeEntry(apiUrl, provider, apiKey);
+                mcpSection.astrivya = buildOpenCodeEntry(apiUrl, provider, apiKey, token);
                 (existing as any).mcp = mcpSection;
               } else {
                 const servers = (existing as any).mcpServers || {};
-                servers.astrivya = buildMcpServiceEntry(apiUrl, provider, apiKey);
+                servers.astrivya = buildMcpServiceEntry(apiUrl, provider, apiKey, token);
                 (existing as any).mcpServers = servers;
               }
 
@@ -341,8 +354,12 @@ export function registerSetup(program: Command): void {
           }
 
           if (configured > 0 && token) {
-            console.log(`\n  Set ${color.cyan("ASTRIVYA_TOKEN")} in your shell:\n`);
-            console.log(`    export ASTRIVYA_TOKEN="${token}"`);
+            // Masked only — never echo the full token to stdout/terminal/history.
+            const masked = token.length > 8 ? `${token.slice(0, 4)}…${token.slice(-4)}` : "****";
+            console.log(`\n  ${color.cyan("ASTRIVYA_TOKEN")} saved to config (${masked}).`);
+            console.log(
+              `  Set it in your shell with ${color.cyan("`astrivya auth login`")} or pass --token next time.`,
+            );
             console.log();
             console.log(`  Next: ${color.cyan("astrivya doctor")} to verify your setup.`);
             console.log(`  Then install the VS Code extension: ${dim("https://astrivya.ai/extension")}\n`);
@@ -373,11 +390,11 @@ export function registerSetup(program: Command): void {
 
             if (tool.name === "OpenCode") {
               const mcpSection = (existing as any).mcp || {};
-              mcpSection.astrivya = buildOpenCodeEntry(apiUrl, provider, apiKey);
+              mcpSection.astrivya = buildOpenCodeEntry(apiUrl, provider, apiKey, token);
               (existing as any).mcp = mcpSection;
             } else {
               const servers = (existing as any).mcpServers || {};
-              servers.astrivya = buildMcpServiceEntry(apiUrl, provider, apiKey);
+              servers.astrivya = buildMcpServiceEntry(apiUrl, provider, apiKey, token);
               (existing as any).mcpServers = servers;
             }
 
@@ -396,8 +413,13 @@ export function registerSetup(program: Command): void {
         success(`${configured} configured, ${skipped} skipped.`);
 
         if (configured > 0) {
-          console.log(`\n  Set ${color.cyan("ASTRIVYA_TOKEN")} in your shell:\n`);
-          console.log(`    export ASTRIVYA_TOKEN="${token}"`);
+          if (token) {
+            // Masked only — never echo the full token to stdout/terminal/history.
+            const masked = token.length > 8 ? `${token.slice(0, 4)}…${token.slice(-4)}` : "****";
+            console.log(`\n  ${color.cyan("ASTRIVYA_TOKEN")} saved to config (${masked}).`);
+          } else {
+            console.log(`\n  ${dim("Running in local mode. Cloud features require ASTRIVYA_TOKEN.")}`);
+          }
           console.log();
           console.log(`  Next: ${color.cyan("astrivya doctor")} to verify your setup.`);
           console.log(`  Then install the VS Code extension: ${dim("https://astrivya.ai/extension")}\n`);

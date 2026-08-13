@@ -29,7 +29,7 @@ async function getLocalAkgStats(): Promise<{ nodes: number } | null> {
 export function registerStatus(program: Command): void {
   program
     .command("status")
-    .description("Quick overview of your Astrivya status â€” org, auth, pending items")
+    .description("Quick overview of your Astrivya status — org, auth, pending items")
     .option("--json", "Output raw JSON")
     .option("--ndjson", "Output newline-delimited JSON")
     .action(async (options) => {
