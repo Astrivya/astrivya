@@ -25,7 +25,10 @@ export function registerUpdate(program: Command): void {
     }
     const manager = detectInstallManager();
     info(`Update available: ${CURRENT_VERSION} ${color.dim("\u2192")} ${color.bold(latest)} (via ${manager}).`);
-    if (!runInstall(buildInstallCommand(manager))) process.exit(1);
+    if (!runInstall(buildInstallCommand(manager))) {
+      process.exitCode = 1;
+      return;
+    }
   });
 
   update
@@ -64,7 +67,10 @@ export function registerUpdate(program: Command): void {
           return;
         }
       }
-      if (!runInstall(buildInstallCommand(detectInstallManager()))) process.exit(1);
+      if (!runInstall(buildInstallCommand(detectInstallManager()))) {
+        process.exitCode = 1;
+        return;
+      }
     });
 
   update

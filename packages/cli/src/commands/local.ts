@@ -214,7 +214,8 @@ export function registerLocal(program: Command): void {
         console.log(`  To toggle offline execution run: ${color.cyan("astrivya local toggle")}\n`);
       } catch (err: unknown) {
         error(`Local setup failed: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -239,7 +240,8 @@ export function registerLocal(program: Command): void {
         }
       } catch (err: unknown) {
         error(`Failed to toggle offline mode: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 }

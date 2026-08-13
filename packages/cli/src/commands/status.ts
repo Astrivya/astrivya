@@ -281,7 +281,8 @@ export function registerStatus(program: Command): void {
           spinner.stop();
         }
         console.error(`${color.red("\u2717")} Status failed:`, getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 }

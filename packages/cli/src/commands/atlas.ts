@@ -23,7 +23,8 @@ export function registerAtlas(program: Command): void {
         await storage.init(workspacePath);
       } catch (err: unknown) {
         error(`Failed to initialize AKG storage: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const staticDir = path.join(__dirname, "atlas");
@@ -256,6 +257,67 @@ export function registerAtlas(program: Command): void {
               return;
             }
 
+            if (pathname === "/api/akg/embedmap") {
+              // PCA 2D projection of chunk embeddings — the "semantic
+              // terrain" of the workspace. Points carry their file, node id,
+              // community and a content preview for hover inspection.
+              const rows = storage.runQuery(
+                `SELECT e.chunk_id, e.vector, c.file_path, c.content, c.node_id, n.community
+                 FROM embeddings e
+                 JOIN chunks c ON c.id = e.chunk_id
+                 LEFT JOIN nodes n ON n.id = c.node_id
+                 ORDER BY c.id
+                 LIMIT 4000;`,
+              );
+              const vectors: number[][] = [];
+              const meta: any[] = [];
+              for (const r of rows || []) {
+                if (!r.vector) continue;
+                const raw = r.vector instanceof Uint8Array ? r.vector : new Uint8Array(r.vector);
+                const floats = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
+                vectors.push(Array.from(floats));
+                meta.push({
+                  chunkId: r.chunk_id,
+                  file: r.file_path,
+                  nodeId: r.node_id,
+                  community: r.community ?? null,
+                  preview: String(r.content || "").slice(0, 140),
+                });
+              }
+              if (vectors.length < 3) {
+                res.writeHead(200);
+                res.end(
+                  JSON.stringify({
+                    points: [],
+                    count: 0,
+                    note: "Not enough embeddings yet — run `astrivya akg init` with embeddings.",
+                  }),
+                );
+                return;
+              }
+              const projected = pca2(vectors);
+              let minX = Number.POSITIVE_INFINITY,
+                maxX = Number.NEGATIVE_INFINITY,
+                minY = Number.POSITIVE_INFINITY,
+                maxY = Number.NEGATIVE_INFINITY;
+              for (const [x, y] of projected) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+              }
+              const rx = maxX - minX || 1;
+              const ry = maxY - minY || 1;
+              const points = projected.map(([x, y], i) => ({
+                x: (x - minX) / rx,
+                y: (y - minY) / ry,
+                ...meta[i],
+              }));
+              res.writeHead(200);
+              res.end(JSON.stringify({ points, count: points.length }));
+              return;
+            }
+
             res.writeHead(404);
             res.end(JSON.stringify({ error: "Endpoint not found" }));
             return;
@@ -385,6 +447,62 @@ export function registerAtlas(program: Command): void {
         });
       });
     });
+}
+
+// PCA projection of high-dim vectors to 2D via power iteration on the
+// covariance operator (X^T X v). Avoids materializing the d×d covariance
+// matrix, so it is fine for a few thousand 384-dim vectors.
+function pca2(vectors: number[][]): number[][] {
+  const n = vectors.length;
+  const d = vectors[0].length;
+  const mean = new Array(d).fill(0);
+  for (const v of vectors) for (let i = 0; i < d; i++) mean[i] += v[i] / n;
+  const centered = vectors.map((v) => v.map((x, i) => x - mean[i]));
+
+  const normalize = (v: number[]): number[] => {
+    let norm = 0;
+    for (const x of v) norm += x * x;
+    norm = Math.sqrt(norm) || 1;
+    return v.map((x) => x / norm);
+  };
+
+  const powerIteration = (rows: number[][], seed: number[]): number[] => {
+    let pc = seed;
+    for (let it = 0; it < 25; it++) {
+      const out = new Array(d).fill(0);
+      for (const row of rows) {
+        let dot = 0;
+        for (let i = 0; i < d; i++) dot += row[i] * pc[i];
+        for (let i = 0; i < d; i++) out[i] += row[i] * dot;
+      }
+      pc = normalize(out);
+    }
+    return pc;
+  };
+
+  const pc1 = powerIteration(
+    centered,
+    centered.map(() => 1),
+  );
+  const project = (row: number[], pc: number[]): number => {
+    let dot = 0;
+    for (let i = 0; i < d; i++) dot += row[i] * pc[i];
+    return dot;
+  };
+  const x = centered.map((row) => project(row, pc1));
+
+  // Deflate PC1, then find PC2 on the residual.
+  const residual = centered.map((row) => {
+    const p = project(row, pc1);
+    return row.map((v, i) => v - p * pc1[i]);
+  });
+  const pc2 = powerIteration(
+    residual,
+    residual.map((_, i) => (i % 2 === 0 ? 1 : -1)),
+  );
+  const y = residual.map((row) => project(row, pc2));
+
+  return x.map((xi, i) => [xi, y[i]]);
 }
 
 // Custom community labeling logic based on folder prefixes and keyword analysis

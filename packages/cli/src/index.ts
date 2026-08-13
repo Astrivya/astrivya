@@ -138,5 +138,6 @@ Tips:
 
 main().catch((err) => {
   console.error(`${color.red("Fatal error:")}`, getErrorMessage(err));
-  process.exit(1);
+  process.exitCode = 1;
+  return;
 });

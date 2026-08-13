@@ -34,4 +34,12 @@ describe("@astrivya/cli", () => {
     expect(compat.getToken).toBeInstanceOf(Function);
     expect(compat.getBaseUrl).toBeInstanceOf(Function);
   });
+
+  it("sanitizes HTML bodies out of API error messages", async () => {
+    const compat = await import("../lib/compat");
+    const html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/></head><body>404</body></html>';
+    expect(compat.sanitizeApiErrorBody(html)).toContain("HTML");
+    expect(compat.sanitizeApiErrorBody('{"error":"nope"}')).toBe('{"error":"nope"}');
+    expect(compat.sanitizeApiErrorBody("x".repeat(2000))).toHaveLength(500);
+  });
 });

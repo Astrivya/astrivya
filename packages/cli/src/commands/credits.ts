@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { apiCall, getBaseUrl, getToken, loadConfig } from "../lib/compat";
+import { ensureAuth } from "../lib/auth-guard";
+import { apiCall, getBaseUrl, loadConfig } from "../lib/compat";
 import { color, getErrorMessage, json as printJson, startSpinner, table } from "../lib/output";
 
 export function registerCredits(program: Command): void {
@@ -19,9 +20,8 @@ export function registerCredits(program: Command): void {
 
     let spinner: any = null;
     try {
-      const token = getToken();
-      if (!token) {
-        console.log(color.red("Not logged in. Run 'astrivya auth login' first."));
+      if (!(await ensureAuth())) {
+        process.exitCode = 1;
         return;
       }
 
@@ -94,9 +94,8 @@ export function registerCredits(program: Command): void {
     .action(async (options) => {
       let spinner: any = null;
       try {
-        const token = getToken();
-        if (!token) {
-          console.log(color.red("Not logged in. Run 'astrivya auth login' first."));
+        if (!(await ensureAuth())) {
+          process.exitCode = 1;
           return;
         }
 

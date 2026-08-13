@@ -178,7 +178,8 @@ export function registerInit(program: Command): void {
 `);
       } catch (err: unknown) {
         console.error("Setup wizard failed:", getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 }

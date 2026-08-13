@@ -18,6 +18,63 @@ import {
 } from "../lib/compat";
 import { getErrorMessage, json as printJson } from "../lib/output";
 
+export async function runLoginFlow(): Promise<{ profile?: { email?: string } }> {
+  const existing = getToken();
+  if (existing) {
+    clearConfig();
+  }
+
+  const port = await findFreePort(18080);
+  if (!port) {
+    throw new Error("Could not find a free port for the auth callback server.");
+  }
+
+  const baseUrl = getBaseUrl();
+  const authUrl = `${baseUrl}/auth/cli?cli_port=${port}`;
+
+  console.log("Opening browser for authentication...");
+  await openBrowser(authUrl);
+
+  console.log("Waiting for authentication callback...");
+  const result = await startOAuthServer(port);
+
+  saveConfig({ token: result.token, baseUrl });
+
+  // Exchange short-lived token for a long-lived personal access token (PAT) for the device
+  try {
+    const hn = hostname();
+    const deviceName = `${hn} - CLI`;
+    const tokenResult = await apiCall("/api/ide/token", "POST", { device_name: deviceName });
+    if (tokenResult?.token) {
+      saveConfig({ token: tokenResult.token });
+    }
+  } catch {
+    // Fallback to using the session token if the exchange endpoint fails
+  }
+
+  // Sync plugins after successful login
+  try {
+    const token = getPremiumAuth();
+    if (token) {
+      const pm = new PluginManager(undefined, getBaseUrl());
+      const syncResult = await pm.sync(token);
+      if (syncResult.synced.length > 0) {
+        console.error(`[Astrivya] Installed ${syncResult.synced.length} plugin(s)`);
+      }
+      if (syncResult.updated.length > 0) {
+        console.error(`[Astrivya] Updated ${syncResult.updated.length} plugin(s)`);
+      }
+      if (syncResult.failed.length > 0) {
+        console.error(`[Astrivya] ${syncResult.failed.length} plugin(s) failed to install`);
+      }
+    }
+  } catch {
+    // Plugin sync failed — user can run `astrivya plugins sync` later
+  }
+
+  return result;
+}
+
 export function registerAuth(program: Command): void {
   const auth = program.command("auth").description("Authentication commands");
 
@@ -26,59 +83,7 @@ export function registerAuth(program: Command): void {
     .description("Authenticate with Astrivya (opens browser)")
     .action(async () => {
       try {
-        const existing = getToken();
-        if (existing) {
-          clearConfig();
-        }
-
-        const port = await findFreePort(18080);
-        if (!port) {
-          console.error("Could not find a free port for the auth callback server.");
-          process.exit(1);
-        }
-
-        const baseUrl = getBaseUrl();
-        const authUrl = `${baseUrl}/auth/cli?cli_port=${port}`;
-
-        console.log("Opening browser for authentication...");
-        await openBrowser(authUrl);
-
-        console.log("Waiting for authentication callback...");
-        const result = await startOAuthServer(port);
-
-        saveConfig({ token: result.token, baseUrl });
-
-        // Exchange short-lived token for a long-lived personal access token (PAT) for the device
-        try {
-          const hn = hostname();
-          const deviceName = `${hn} - CLI`;
-          const tokenResult = await apiCall("/api/ide/token", "POST", { device_name: deviceName });
-          if (tokenResult?.token) {
-            saveConfig({ token: tokenResult.token });
-          }
-        } catch {
-          // Fallback to using the session token if the exchange endpoint fails
-        }
-
-        // Sync plugins after successful login
-        try {
-          const token = getPremiumAuth();
-          if (token) {
-            const pm = new PluginManager(undefined, getBaseUrl());
-            const syncResult = await pm.sync(token);
-            if (syncResult.synced.length > 0) {
-              console.error(`[Astrivya] Installed ${syncResult.synced.length} plugin(s)`);
-            }
-            if (syncResult.updated.length > 0) {
-              console.error(`[Astrivya] Updated ${syncResult.updated.length} plugin(s)`);
-            }
-            if (syncResult.failed.length > 0) {
-              console.error(`[Astrivya] ${syncResult.failed.length} plugin(s) failed to install`);
-            }
-          }
-        } catch {
-          // Plugin sync failed — user can run `astrivya plugins sync` later
-        }
+        const result = await runLoginFlow();
 
         const email = result.profile?.email || "";
         console.log(`\n✓ Authenticated${email ? ` as ${email}` : ""}.`);
@@ -95,7 +100,7 @@ export function registerAuth(program: Command): void {
 `);
       } catch (err: unknown) {
         console.error("Authentication failed:", getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
       }
     });
 
@@ -127,7 +132,8 @@ export function registerAuth(program: Command): void {
         if (config.teamId) console.log(`  Default team: ${config.teamId}`);
       } catch (err: unknown) {
         console.error("Failed to fetch profile:", getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -153,7 +159,8 @@ export function registerAuth(program: Command): void {
             }
           } catch (err: unknown) {
             console.error(`Invalid token: ${getErrorMessage(err)}`);
-            process.exit(1);
+            process.exitCode = 1;
+            return;
           }
           saveConfig({ token: options.set });
           console.log("✓ Token validated and saved.");
@@ -163,7 +170,8 @@ export function registerAuth(program: Command): void {
           const sessionToken = getToken();
           if (!sessionToken) {
             console.error("Not authenticated. Run `astrivya auth login` first.");
-            process.exit(1);
+            process.exitCode = 1;
+            return;
           }
           const hn = hostname();
           const deviceName = `${hn} - CLI`;
@@ -175,7 +183,8 @@ export function registerAuth(program: Command): void {
         const token = getToken();
         if (!token) {
           console.error("No token found. Run `astrivya auth login` first.");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         if (options.ndjson) {
@@ -197,7 +206,8 @@ export function registerAuth(program: Command): void {
         }
       } catch (err: unknown) {
         console.error("Token command failed:", getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -252,14 +262,16 @@ export function registerAuth(program: Command): void {
           } else {
             console.error(`License key rejected by server (HTTP ${res.status})`);
           }
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         saveLicenseKey(key);
         console.log("License key activated and saved.");
       } catch (err: unknown) {
         console.error("License command failed:", getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 }

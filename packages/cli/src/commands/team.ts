@@ -1,6 +1,7 @@
 import { AkgStorage } from "@astrivya/akg-core";
 import type { Command } from "commander";
-import { apiCall, getToken, loadConfig, saveConfig } from "../lib/compat";
+import { ensureAuth } from "../lib/auth-guard";
+import { apiCall, loadConfig, saveConfig } from "../lib/compat";
 import { color, error, getErrorMessage, info, success } from "../lib/output";
 
 /**
@@ -19,10 +20,9 @@ export function registerTeam(program: Command): void {
     .argument("<name>", "Human-readable team name")
     .option("--slug <slug>", "URL-safe slug (defaults to a slugified name)")
     .action(async (name: string, options: { slug?: string }) => {
-      const token = getToken();
-      if (!token) {
-        error("Not authenticated. Run `astrivya auth login` or set ASTRIVYA_TOKEN first.");
-        process.exit(1);
+      if (!(await ensureAuth())) {
+        process.exitCode = 1;
+        return;
       }
       const slug =
         options.slug ||
@@ -47,7 +47,8 @@ export function registerTeam(program: Command): void {
         }
       } catch (err: unknown) {
         error(`Failed to create team: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -86,7 +87,8 @@ export function registerTeam(program: Command): void {
         console.log();
       } catch (err: unknown) {
         error(`Team status failed: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -96,12 +98,17 @@ export function registerTeam(program: Command): void {
     .argument("<email>", "Teammate email address")
     .option("--role <role>", "role to grant: member|admin", "member")
     .action(async (email: string, options: { role: string }) => {
+      if (!(await ensureAuth())) {
+        process.exitCode = 1;
+        return;
+      }
       try {
         const config = loadConfig();
         const teamId = config.teamId || config.orgId;
         if (!teamId) {
           error("No team configured. Create or join a team first (`astrivya team create|join`).");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         const res = await apiCall("/api/team/invite", "POST", {
           teamId,
@@ -120,7 +127,8 @@ export function registerTeam(program: Command): void {
         console.log();
       } catch (err: unknown) {
         error(`Invite failed: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -129,6 +137,10 @@ export function registerTeam(program: Command): void {
     .description("Accept a team invite by code and join the shared team")
     .argument("<code>", "Invite code from your teammate")
     .action(async (code: string) => {
+      if (!(await ensureAuth())) {
+        process.exitCode = 1;
+        return;
+      }
       try {
         const res = await apiCall("/api/team/join", "POST", { code });
         const team = res.team || {};
@@ -144,7 +156,8 @@ export function registerTeam(program: Command): void {
         if (team.id) info(`Team MCP id: ${team.id} — run \`astrivya team mcp\`.`);
       } catch (err: unknown) {
         error(`Join failed: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -157,7 +170,8 @@ export function registerTeam(program: Command): void {
       const mcpId = options.id || config.teamMcpId || process.env.ASTRIVYA_TEAM_MCP;
       if (!mcpId) {
         error("No team MCP id set. Create/join a team first (`astrivya team create|join`).");
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       if (options.id) saveConfig({ teamMcpId: options.id });
       console.log();

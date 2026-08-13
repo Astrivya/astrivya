@@ -53,14 +53,16 @@ export function registerRuntime(program: Command): void {
 
       if (!validRuntimes.includes(runtimeId)) {
         error(`Invalid runtime: ${runtimeId}. Supported values: ${validRuntimes.join(", ")}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       if (runtimeId !== "auto") {
         const rtObj = manager.getRuntime(runtimeId);
         if (!rtObj) {
           error(`Runtime '${runtimeId}' is not registered`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
       }
 
