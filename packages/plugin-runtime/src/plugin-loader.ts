@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { CommandPlugin, LocalManifestEntry, PluginMetadata, ToolPlugin } from "@astrivya/plugin-api";
 
 export class PluginLoader {
@@ -32,7 +33,9 @@ export class PluginLoader {
     }
 
     try {
-      const mod = (await import(mainJs)) as PluginModule;
+      // `import()` of an absolute Windows path (C:\...) is rejected by the ESM
+      // loader — it requires a file:// URL. Same on POSIX for paths with spaces.
+      const mod = (await import(pathToFileURL(mainJs).href)) as PluginModule;
       return mod;
     } catch {
       return null;
