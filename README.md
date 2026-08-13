@@ -11,6 +11,7 @@ client.
 [![Stars](https://img.shields.io/github/stars/astrivya/astrivya?style=flat&label=Stars&color=6366f1)](https://github.com/astrivya/astrivya)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-8b5cf6?style=flat)](LICENSE)
 [![CI](https://github.com/astrivya/astrivya/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/astrivya/astrivya/actions/workflows/ci.yml)
+[![gitleaks](https://img.shields.io/badge/protected%20by-gitleaks-blue?style=flat)](https://github.com/astrivya/astrivya/actions/workflows/gitleaks.yml)
 [![npm](https://img.shields.io/npm/v/@astrivya/akg-core?style=flat&color=06b6d4)](https://www.npmjs.com/package/@astrivya/akg-core)
 [![Last commit](https://img.shields.io/github/last-commit/astrivya/astrivya?style=flat&color=64748b)](https://github.com/astrivya/astrivya)
 [![Contributors](https://img.shields.io/github/contributors/astrivya/astrivya?style=flat&color=10b981)](https://github.com/astrivya/astrivya/graphs/contributors)

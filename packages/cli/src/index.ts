@@ -22,6 +22,7 @@ import { startTui } from "./commands/tui";
 import { registerUpdate } from "./commands/update";
 import { setGlobalProgram } from "./lib/command-registry";
 import { getToken, setVerbose } from "./lib/compat";
+import { runRootAction } from "./lib/entry-guard";
 import { color, getErrorMessage, setPrintMode } from "./lib/output";
 import { loadCommandPlugins } from "./lib/plugin";
 import { checkForUpdates, formatBanner, isOptedOut } from "./lib/update-notifier";
@@ -72,19 +73,7 @@ Tips:
       }
     })
     .action(() => {
-      // `astrivya` with no arguments starts the interactive TUI. Commander
-      // also routes *unknown* commands here (e.g. `astrivya frobnicate`);
-      // treat those as errors instead of launching the TUI — a typo'd
-      // command must never hang a non-TTY session (CI, pipes, scripts).
-      if (program.args.length > 0) {
-        console.error(color.red(`Unknown command: ${program.args.join(" ")}`));
-        program.outputHelp({ error: true });
-        process.exit(1);
-      }
-      startTui().catch((err) => {
-        console.error("TUI error:", getErrorMessage(err));
-        process.exit(1);
-      });
+      runRootAction(program, startTui);
     });
 
   // Local knowledge graph commands (always available)
