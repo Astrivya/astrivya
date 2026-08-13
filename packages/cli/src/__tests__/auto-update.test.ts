@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn<() => { autoUpdate?: "on" | "prompt" | "off" }>(() => ({})),
@@ -29,6 +30,8 @@ vi.mock("@astrivya/plugin-runtime", () => {
 });
 
 import {
+  cascadeUpdate,
+  consumeCascadeSyncFlag,
   markUpdateFailed,
   markUpdateSucceeded,
   maybeAutoUpdate,
@@ -37,7 +40,9 @@ import {
   sameMajor,
   shouldAutoInstall,
   shouldSyncPlugins,
+  updateStandaloneMcp,
 } from "../lib/auto-update";
+import { setPrintMode } from "../lib/output";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "astrivya-auto-update-"));
@@ -278,5 +283,130 @@ describe("auto-update — plugin auto-sync", () => {
     expect(shouldSyncPlugins({}, now)).toBe(true);
     expect(shouldSyncPlugins({ lastSync: now - 1000 }, now)).toBe(false);
     expect(shouldSyncPlugins({ lastSync: now - day - 1000 }, now)).toBe(true);
+  });
+});
+
+describe("auto-update — cascade: standalone mcp-server", () => {
+  const installed = "/usr/lib/node_modules/@astrivya/mcp-server";
+
+  it("detects and installs with the same manager", () => {
+    const exec = vi.fn<(cmd: string) => string>();
+    exec.mockReturnValueOnce(`${installed}\n`).mockReturnValueOnce("+ @astrivya/mcp-server@0.3.0");
+    const result = updateStandaloneMcp("npm", exec);
+    expect(result).toEqual({ kind: "updated" });
+    expect(exec).toHaveBeenNthCalledWith(1, "npm ls -g @astrivya/mcp-server --depth=0");
+    expect(exec).toHaveBeenNthCalledWith(2, "npm install -g @astrivya/mcp-server@latest");
+  });
+
+  it("skips when the global install is not present", () => {
+    const exec = vi.fn<(cmd: string) => string>(() => "");
+    expect(updateStandaloneMcp("npm", exec)).toEqual({ kind: "not-installed" });
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips local/unknown managers", () => {
+    expect(updateStandaloneMcp("local", vi.fn())).toEqual({ kind: "not-installed" });
+    expect(updateStandaloneMcp("unknown", vi.fn())).toEqual({ kind: "not-installed" });
+  });
+
+  it("skips when the detection command fails", () => {
+    const exec = vi.fn<(cmd: string) => string>(() => {
+      throw new Error("boom");
+    });
+    expect(updateStandaloneMcp("npm", exec)).toEqual({ kind: "not-installed" });
+  });
+
+  it("reports install failure", () => {
+    const exec = vi.fn<(cmd: string) => string>();
+    exec.mockReturnValueOnce(`${installed}\n`);
+    exec.mockImplementationOnce(() => {
+      throw new Error("EPERM");
+    });
+    expect(updateStandaloneMcp("npm", exec)).toEqual({ kind: "install-failed" });
+  });
+
+  it("uses manager-specific detect/install commands", () => {
+    const pnpmExec = vi.fn<(cmd: string) => string>(() => installed);
+    updateStandaloneMcp("pnpm", pnpmExec);
+    expect(pnpmExec).toHaveBeenNthCalledWith(1, "pnpm ls -g @astrivya/mcp-server");
+    expect(pnpmExec).toHaveBeenNthCalledWith(2, "pnpm add -g @astrivya/mcp-server@latest");
+
+    const yarnExec = vi.fn<(cmd: string) => string>(() => installed);
+    updateStandaloneMcp("yarn", yarnExec);
+    expect(yarnExec).toHaveBeenNthCalledWith(1, "yarn global list --pattern @astrivya/mcp-server");
+    expect(yarnExec).toHaveBeenNthCalledWith(2, "yarn global add @astrivya/mcp-server@latest");
+
+    const bunExec = vi.fn<(cmd: string) => string>(() => installed);
+    updateStandaloneMcp("bun", bunExec);
+    expect(bunExec).toHaveBeenNthCalledWith(1, "bun pm ls -g");
+    expect(bunExec).toHaveBeenNthCalledWith(2, "bun add -g @astrivya/mcp-server@latest");
+  });
+});
+
+describe("auto-update — cascade wiring", () => {
+  beforeEach(() => {
+    consumeCascadeSyncFlag();
+    setPrintMode(true);
+  });
+
+  afterEach(() => {
+    setPrintMode(false);
+  });
+
+  it("schedules a forced plugin sync after an mcp update", () => {
+    const exec = vi.fn<(cmd: string) => string>();
+    exec.mockReturnValueOnce("/usr/lib/node_modules/@astrivya/mcp-server\n").mockReturnValueOnce("ok");
+    cascadeUpdate("npm", exec);
+    expect(consumeCascadeSyncFlag()).toBe(true);
+  });
+
+  it("does not schedule a forced sync when mcp is skipped", () => {
+    cascadeUpdate(
+      "npm",
+      vi.fn(() => ""),
+    );
+    expect(consumeCascadeSyncFlag()).toBe(false);
+  });
+
+  it("never throws", () => {
+    const exec = vi.fn<(cmd: string) => string>(() => {
+      throw new Error("boom");
+    });
+    expect(() => cascadeUpdate("npm", exec)).not.toThrow();
+    expect(() => cascadeUpdate("local", exec)).not.toThrow();
+  });
+});
+
+describe("auto-update — forced plugin sync", () => {
+  it("bypasses the daily throttle with force", async () => {
+    mocks.getPremiumAuth.mockReturnValue("astr_token");
+    const dir = tempDir();
+    const file = join(dir, "plugin-sync.json");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ lastSync: Date.now() }), "utf8");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await maybeSyncPlugins({ force: true }, file);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("cloud-cli"));
+    } finally {
+      log.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still respects the throttle without force", async () => {
+    mocks.getPremiumAuth.mockReturnValue("astr_token");
+    const dir = tempDir();
+    const file = join(dir, "plugin-sync.json");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ lastSync: Date.now() }), "utf8");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await maybeSyncPlugins({}, file);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

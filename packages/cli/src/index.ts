@@ -20,7 +20,7 @@ import { registerSync } from "./commands/sync";
 import { registerTeam } from "./commands/team";
 import { startTui } from "./commands/tui";
 import { registerUpdate } from "./commands/update";
-import { maybeAutoUpdate, maybeSyncPlugins } from "./lib/auto-update";
+import { consumeCascadeSyncFlag, maybeAutoUpdate, maybeSyncPlugins } from "./lib/auto-update";
 import { setGlobalProgram } from "./lib/command-registry";
 import { getToken, setVerbose } from "./lib/compat";
 import { runRootAction } from "./lib/entry-guard";
@@ -70,7 +70,7 @@ Tips:
     })
     .hook("postAction", async (thisCommand: Command) => {
       const opts = thisCommand.optsWithGlobals();
-      await maybeSyncPlugins({ local: opts.local === true });
+      await maybeSyncPlugins({ local: opts.local === true, force: consumeCascadeSyncFlag() });
     })
     .action(() => {
       runRootAction(program, startTui);

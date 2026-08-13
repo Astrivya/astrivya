@@ -70,12 +70,115 @@ export function markUpdateSucceeded(file = CACHE_FILE): void {
   writeCache(cache, file);
 }
 
+export type ExecFn = (cmd: string) => string;
+
+export function runExec(cmd: string): string {
+  return execSync(cmd, { stdio: "pipe", encoding: "utf8", timeout: INSTALL_TIMEOUT_MS }) as string;
+}
+
+export function mcpDetectCommand(manager: ReturnType<typeof detectInstallManager>): string | null {
+  switch (manager) {
+    case "npm":
+      return "npm ls -g @astrivya/mcp-server --depth=0";
+    case "pnpm":
+      return "pnpm ls -g @astrivya/mcp-server";
+    case "yarn":
+      return "yarn global list --pattern @astrivya/mcp-server";
+    case "bun":
+      return "bun pm ls -g";
+    default:
+      return null;
+  }
+}
+
+export function mcpInstallCommand(manager: ReturnType<typeof detectInstallManager>): string | null {
+  switch (manager) {
+    case "npm":
+      return "npm install -g @astrivya/mcp-server@latest";
+    case "pnpm":
+      return "pnpm add -g @astrivya/mcp-server@latest";
+    case "yarn":
+      return "yarn global add @astrivya/mcp-server@latest";
+    case "bun":
+      return "bun add -g @astrivya/mcp-server@latest";
+    default:
+      return null;
+  }
+}
+
+export type McpCascadeResult = { kind: "updated" } | { kind: "not-installed" } | { kind: "install-failed" };
+
+// Detect + update a standalone global @astrivya/mcp-server using the SAME
+// install manager the CLI itself was installed with. Local/unknown managers
+// and missing global installs are silent skips (the CLI-bundled server rides
+// the CLI update; npx installs are ephemeral by design).
+export function updateStandaloneMcp(
+  manager: ReturnType<typeof detectInstallManager>,
+  execFn: ExecFn = runExec,
+): McpCascadeResult {
+  const detectCmd = mcpDetectCommand(manager);
+  if (!detectCmd) return { kind: "not-installed" };
+  let detected = false;
+  try {
+    const out = execFn(detectCmd);
+    detected = out.includes("@astrivya/mcp-server");
+  } catch {
+    return { kind: "not-installed" };
+  }
+  if (!detected) return { kind: "not-installed" };
+  const installCmd = mcpInstallCommand(manager);
+  if (!installCmd) return { kind: "not-installed" };
+  try {
+    execFn(installCmd);
+    return { kind: "updated" };
+  } catch {
+    return { kind: "install-failed" };
+  }
+}
+
+let _cascadeSyncPending = false;
+
+export function setCascadeSyncPending(): void {
+  _cascadeSyncPending = true;
+}
+
+// Consumed by the postAction hook so the forced plugin sync runs while the
+// process is still alive (fire-and-forget inside runInstall could be cut off).
+export function consumeCascadeSyncFlag(): boolean {
+  const pending = _cascadeSyncPending;
+  _cascadeSyncPending = false;
+  return pending;
+}
+
+// Runs after a successful CLI install: updates the standalone global
+// @astrivya/mcp-server (same manager) and schedules a forced plugin sync.
+// Soft-fail everywhere — never throws, never blocks the exit path.
+export function cascadeUpdate(manager: ReturnType<typeof detectInstallManager>, execFn: ExecFn = runExec): void {
+  const spinner = startSpinner("Updating @astrivya/mcp-server\u2026");
+  const result = updateStandaloneMcp(manager, execFn);
+  if (result.kind === "updated") {
+    spinner.succeed();
+    success("Also updated @astrivya/mcp-server. Restart your MCP client to use it.");
+    setCascadeSyncPending();
+    return;
+  }
+  if (result.kind === "install-failed") {
+    spinner.fail();
+    const cmd = mcpInstallCommand(manager);
+    error("Could not update @astrivya/mcp-server.");
+    info(`You can run it manually: ${cmd}`);
+    return;
+  }
+  spinner.stop();
+}
+
 export function runInstall(cmd: string, file = CACHE_FILE): boolean {
   const spinner = startSpinner("Installing the latest astrivya\u2026");
   try {
     execSync(cmd, { stdio: "pipe", encoding: "utf8", timeout: INSTALL_TIMEOUT_MS });
     spinner.succeed();
     markUpdateSucceeded(file);
+    cascadeUpdate(detectInstallManager());
     success("Updated to the latest version. Next command uses the new version.");
     return true;
   } catch (err: unknown) {
@@ -174,14 +277,18 @@ export function shouldSyncPlugins(cache: PluginSyncCache, now = Date.now()): boo
 
 // Silent plugin auto-sync: runs ~once per day after commands when the user is
 // authenticated. sha256-verified on the plugin-runtime side; only prints when
-// something changed or failed. Best-effort — never crashes the CLI.
-export async function maybeSyncPlugins(opts: { local?: boolean } = {}, file = PLUGIN_SYNC_FILE): Promise<void> {
+// something changed or failed. Best-effort — never crashes the CLI. `force`
+// bypasses the daily throttle (used after a CLI update cascade).
+export async function maybeSyncPlugins(
+  opts: { local?: boolean; force?: boolean } = {},
+  file = PLUGIN_SYNC_FILE,
+): Promise<void> {
   if (opts.local) return;
   if (isOptedOut()) return;
   const token = getPremiumAuth();
   if (!token) return;
   const cache = readPluginSyncCache(file);
-  if (!shouldSyncPlugins(cache)) return;
+  if (!opts.force && !shouldSyncPlugins(cache)) return;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ lastSync: Date.now() }, null, 2), "utf8");
