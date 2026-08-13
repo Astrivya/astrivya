@@ -10,8 +10,14 @@ type Provider = (typeof SUPPORTED_PROVIDERS)[number];
 
 interface Resource {
   id: string;
-  name: string;
+  name?: string;
+  title?: string;
   [key: string]: unknown;
+}
+
+/** Display name for a resource (Notion pages expose `title`, others `name`). */
+function resourceName(r: Resource): string {
+  return r.name || r.title || r.id;
 }
 
 async function ensureConnectorAuth(provider: Provider): Promise<void> {
@@ -294,8 +300,14 @@ export function registerSync(program: Command): void {
         try {
           await ensureConnectorAuth(provider);
 
-          const resources: Resource[] = await apiCall(getResourceEndpoint(provider), "GET");
-          const items = Array.isArray(resources) ? resources : [];
+          // Notion returns `{ pages, databases }` (the web app needs the split);
+          // flatten both into the array contract the other providers use.
+          const raw: any = await apiCall(getResourceEndpoint(provider), "GET");
+          const items: Resource[] = Array.isArray(raw)
+            ? raw
+            : Array.isArray(raw?.pages) || Array.isArray(raw?.databases)
+              ? [...(raw.pages || []), ...(raw.databases || [])]
+              : [];
 
           if (options.json) {
             console.log(JSON.stringify(items, null, 2));
@@ -311,7 +323,7 @@ export function registerSync(program: Command): void {
             console.log(`\nAvailable ${provider} resources:\n`);
             items.forEach((r, i) => {
               const imported = r.imported ? " [imported]" : "";
-              console.log(`  ${i + 1}. ${r.name}${imported}`);
+              console.log(`  ${i + 1}. ${resourceName(r)}${imported}`);
             });
             console.log();
             return;
@@ -323,7 +335,7 @@ export function registerSync(program: Command): void {
           } else {
             console.log(`\nSelect resources to import (comma-separated numbers, or 'all'):\n`);
             items.forEach((r, i) => {
-              console.log(`  ${i + 1}. ${r.name}`);
+              console.log(`  ${i + 1}. ${resourceName(r)}`);
             });
             console.log();
             const answer = await prompt("Import (numbers or 'all'): ");
@@ -348,7 +360,7 @@ export function registerSync(program: Command): void {
           for (const resource of toImport) {
             try {
               await apiCall(getImportEndpoint(provider), "POST", resource);
-              console.log(`  \u2713 Imported: ${resource.name}`);
+              console.log(`  \u2713 Imported: ${resourceName(resource)}`);
               imported++;
             } catch (err: unknown) {
               console.log(`  \u2717 Failed: ${resource.name} \u2014 ${getErrorMessage(err)}`);

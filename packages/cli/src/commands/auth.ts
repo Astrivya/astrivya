@@ -221,19 +221,18 @@ export function registerAuth(program: Command): void {
             console.log("Not authenticated. Run `astrivya auth login` first.");
             return;
           }
-          const status = await apiCall("/api/billing/status", "GET");
-          const license = status?.license;
-          if (!license) {
-            console.log("No active license. Visit the billing page to upgrade.");
+          const status = await apiCall("/api/tier", "GET");
+          const tier = status?.tier;
+          if (!tier || tier === "starter") {
+            console.log("No active plan. Visit the billing page to upgrade.");
             return;
           }
-          console.log(`  Tier: ${license.tier || "pro"}`);
-          if (license.expiresAt) {
-            const d = new Date(license.expiresAt);
+          console.log(`  Tier: ${tier}`);
+          if (status?.tierExpiresAt) {
+            const d = new Date(status.tierExpiresAt);
             console.log(`  Expires: ${d.toLocaleDateString()}`);
           }
-          const active = license.active ? "active" : "inactive";
-          console.log(`  Status: ${active}`);
+          console.log("  Status: active");
           return;
         }
 

@@ -1,6 +1,6 @@
 import { AkgStorage } from "@astrivya/akg-core";
 import type { Command } from "commander";
-import { apiCall, getBaseUrl, getToken, loadConfig, saveConfig } from "../lib/compat";
+import { apiCall, getToken, loadConfig, saveConfig } from "../lib/compat";
 import { color, error, getErrorMessage, info, success } from "../lib/output";
 
 /**
@@ -33,10 +33,16 @@ export function registerTeam(program: Command): void {
           .replace(/(^-|-$)/g, "");
       try {
         const res = await apiCall("/api/org", "POST", { name, slug });
-        saveConfig({ orgId: res.organization?.id, role: res.role, teamMcpId: res.organization?.mcp_id });
-        success(`Created team "${name}" (${res.organization?.id}).`);
-        if (res.organization?.mcp_id) {
-          info(`Team MCP id: ${res.organization.mcp_id}`);
+        saveConfig({
+          orgId: res.organization?.id,
+          teamId: res.team?.id,
+          role: res.role,
+          teamMcpId: res.team?.id,
+          teamName: res.team?.name,
+        });
+        success(`Created team "${name}" (${res.team?.id || res.organization?.id}).`);
+        if (res.team?.id) {
+          info(`Team MCP id: ${res.team.id}`);
           info("Run `astrivya team mcp` to start the shared team MCP locally.");
         }
       } catch (err: unknown) {
@@ -64,7 +70,7 @@ export function registerTeam(program: Command): void {
         console.log();
         if (ctx.status === "fulfilled") {
           const c = ctx.value;
-          console.log(`  Team:    ${c.org?.name ?? "(none)"} (${c.org?.slug ?? "-"})`);
+          console.log(`  Team:    ${c.team?.name ?? "(none)"} (${c.team?.slug ?? "-"})`);
           console.log(`  Meta:    ${(c.members || []).length} members`);
         } else {
           console.log(`  Team:    ${color.yellow("unreachable")} — ${getErrorMessage(ctx.reason)}`);
@@ -91,13 +97,25 @@ export function registerTeam(program: Command): void {
     .option("--role <role>", "role to grant: member|admin", "member")
     .action(async (email: string, options: { role: string }) => {
       try {
-        const res = await apiCall("/api/team/invites", "POST", { email, role: options.role });
+        const config = loadConfig();
+        const teamId = config.teamId || config.orgId;
+        if (!teamId) {
+          error("No team configured. Create or join a team first (`astrivya team create|join`).");
+          process.exit(1);
+        }
+        const res = await apiCall("/api/team/invite", "POST", {
+          teamId,
+          email,
+          role: options.role,
+          expiresInDays: 7,
+        });
         console.log();
         success(`Invited ${email} (${options.role}).`);
-        if (res.invite?.code) {
-          console.log(`\n  Join code: ${color.bold(res.invite.code)}`);
-          console.log(`  Teammate runs: ${color.cyan(`astrivya team join ${res.invite.code}`)}`);
-          console.log(`  Or opens: ${getBaseUrl()}${res.invite.join_path || "/team/join"}?code=${res.invite.code}`);
+        const invitation = res.invitation || {};
+        if (invitation.code) {
+          console.log(`\n  Join code: ${color.bold(invitation.code)}`);
+          console.log(`  Teammate runs: ${color.cyan(`astrivya team join ${invitation.code}`)}`);
+          if (res.shareLink) console.log(`  Or opens: ${res.shareLink}`);
         }
         console.log();
       } catch (err: unknown) {
@@ -112,15 +130,18 @@ export function registerTeam(program: Command): void {
     .argument("<code>", "Invite code from your teammate")
     .action(async (code: string) => {
       try {
-        const res = await apiCall(`/api/team/invites/${code}/accept`, "POST", {});
+        const res = await apiCall("/api/team/join", "POST", { code });
+        const team = res.team || {};
+        const role = res.role || team.role || "member";
         saveConfig({
-          orgId: res.org?.id,
-          role: res.role,
-          teamMcpId: res.org?.mcp_id,
-          teamName: res.org?.name,
+          orgId: team.org_id,
+          teamId: team.id,
+          role,
+          teamMcpId: team.id,
+          teamName: team.name,
         });
-        success(`Joined team "${res.org?.name}" as ${res.role}.`);
-        if (res.org?.mcp_id) info(`Team MCP id: ${res.org.mcp_id} — run \`astrivya team mcp\`.`);
+        success(`Joined team "${team.name}" as ${role}.`);
+        if (team.id) info(`Team MCP id: ${team.id} — run \`astrivya team mcp\`.`);
       } catch (err: unknown) {
         error(`Join failed: ${getErrorMessage(err)}`);
         process.exit(1);

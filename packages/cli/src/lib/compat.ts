@@ -97,7 +97,7 @@ export function getPremiumAuth(): string | undefined {
 }
 
 export function getBaseUrl(): string {
-  return process.env.ASTRIVYA_BASE_URL || loadConfig().baseUrl || "https://www.astrivya.ai";
+  return process.env.ASTRIVYA_BASE_URL || loadConfig().baseUrl || "https://api.astrivya.ai";
 }
 
 export function getOrgId(): string | undefined {

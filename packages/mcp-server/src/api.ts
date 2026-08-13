@@ -1,9 +1,9 @@
-const CLOUD_URL = process.env.ASTRIVYA_CLOUD_URL || "";
+const CLOUD_URL = process.env.ASTRIVYA_CLOUD_URL || "https://api.astrivya.ai";
 const OPENAI_KEY = process.env.ASTRIVYA_OPENAI_KEY;
 const ANTHROPIC_KEY = process.env.ASTRIVYA_ANTHROPIC_KEY;
 
 function resolveBaseUrl(): string {
-  return process.env.ASTRIVYA_BASE_URL || "https://www.astrivya.ai";
+  return process.env.ASTRIVYA_BASE_URL || "https://api.astrivya.ai";
 }
 
 function resolveToken(): string | undefined {
@@ -28,8 +28,8 @@ export const API_PATHS = {
   ORG_CREATE: "/api/org",
   TEAM_CONTEXT: "/api/team/context",
   TEAM_MEMBERS: "/api/team/members",
-  TEAM_INVITES: "/api/team/invites",
-  TEAM_INVITES_ACCEPT: (code: string) => `/api/team/invites/${code}/accept`,
+  TEAM_INVITES: "/api/team/invite",
+  TEAM_JOIN: "/api/team/join",
 } as const;
 
 export function getConfig() {

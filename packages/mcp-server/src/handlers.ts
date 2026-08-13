@@ -294,12 +294,12 @@ async function teamDigestBlock(): Promise<Record<string, unknown> | undefined> {
   if (!syncUrl || !token || !teamId) return undefined;
   try {
     const cloud = await syncCall(API_PATHS.TEAM_CONTEXT, "GET");
-    const org = cloud?.org;
+    const team = cloud?.team;
     const members = (cloud?.members || []).length;
-    const decisions = (cloud?.recentDecisions || []).slice(0, 3).map((d: any) => d.title);
+    const decisions = (cloud?.recent_decisions || []).slice(0, 3).map((d: any) => d.title);
     return {
       mcpId: teamId,
-      name: org?.name ?? null,
+      name: team?.name ?? null,
       members,
       recent_decisions: decisions,
     };
@@ -499,7 +499,7 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
     if (syncUrl && token) {
       try {
         const id = _args?.id;
-        await syncCall("/api/notifications/read", "PATCH", { id });
+        await syncCall("/api/notifications", "PATCH", { notificationId: id });
         return envelope({ ok: true }, { source: "cloud", note: "Marked read in cloud", quality: "high" });
       } catch {
         // fall through to local
