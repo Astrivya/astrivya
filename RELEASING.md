@@ -62,6 +62,13 @@ node packages/cli/dist/index.js doctor --mcp
   Merging the "Release" PR tags the packages and triggers the publish job,
   which re-runs `npm run check:docs` as its **last gate before publishing**
   (aborts the release if the tool surface drifted).
+- After release-please opens the "Release" PR, the workflow **automatically
+  prepares the branch** ("Prepare release branch" step): it aligns the
+  inter-package `@astrivya/*` ranges to the new version via
+  `scripts/align-release-ranges.mjs` (release-please bumps `version` fields
+  but leaves ranges stale, which would break `npm ci`), regenerates
+  `package-lock.json`, and re-applies biome formatting. No manual step — but
+  let the PR's CI finish before merging (it re-runs on the prepared head).
 - `scripts/publish-bootstrap.sh` is a **one-time bootstrap** for the initial
   baseline — do not re-run it for routine releases.
 
