@@ -21,7 +21,7 @@
     "prepublishOnly": "npm run typecheck && npm run build"
   },
   "dependencies": {
-    "@astrivya/plugin-api": "^0.2.0",
+    "@astrivya/plugin-api": "^0.3.0",
     "env-paths": "^2.2.1",
     "tar": "7.5.22"
   },
