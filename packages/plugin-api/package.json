@@ -11,10 +11,7 @@
     },
     "./package.json": "./package.json"
   },
-  "files": [
-    "dist/",
-    "README.md"
-  ],
+  "files": ["dist/", "README.md"],
   "engines": {
     "node": ">=20"
   },
@@ -35,10 +32,7 @@
     "tsup": "^8.5.1",
     "typescript": "^5.0.0"
   },
-  "keywords": [
-    "astrivya",
-    "plugin-api"
-  ],
+  "keywords": ["astrivya", "plugin-api"],
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
