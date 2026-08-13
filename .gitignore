@@ -22,3 +22,6 @@ coverage/
 # Registry auth must never be committed
 .npmrc
 *.npmrc
+
+# Scratch/temp scripts (never committed)
+.tmp-*
