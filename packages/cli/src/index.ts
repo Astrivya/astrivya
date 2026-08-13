@@ -96,9 +96,16 @@ Tips:
   registerTeam(program);
   registerPlugins(program);
 
-  // Discover and register cloud command plugins
+  // Discover and register cloud command plugins. Built-in commands win:
+  // a plugin command whose name collides with an existing command is
+  // skipped instead of crashing commander with a duplicate-name error.
   const pluginCommands = await loadCommandPlugins();
   for (const cmd of pluginCommands) {
+    const { name } = cmd;
+    if (name && program.commands.some((c) => c.name() === name)) {
+      console.error(`[Astrivya] Skipping plugin command "${name}" — built-in command takes precedence.`);
+      continue;
+    }
     cmd.register(program);
   }
 
