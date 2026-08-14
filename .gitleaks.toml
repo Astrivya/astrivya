@@ -1,12 +1,65 @@
-# Gitleaks allowlist for @astrivya/cli and @astrivya/mcp-server
-# The PostHog capture key below is a PUBLIC key by design — it is meant to be
-# embedded in client-side code (like any PostHog JS snippet key). It only
-# allows sending events to the Astrivya PostHog project; it grants no read
-# or management access. The real secret (personal API key) is never
-# committed. See packages/cli/src/lib/telemetry.ts and
-# packages/mcp-server/src/telemetry.ts.
+# Gitleaks config for Astrivya/astrivya (PUBLIC repo)
+# - Uses ALL default gitleaks rules plus repo-specific ones below.
+# - Baseline (.gitleaks-baseline.json) suppresses pre-existing history findings;
+#   only NEW findings fail the scan (see .github/workflows/gitleaks.yml).
+# - This repo is public: never whitelist real secrets here.
+
+[extend]
+useDefault = true
+
+# ---- Repo-specific rules: private-infrastructure fingerprints ----
+# If any of these ever reappears in this public repo, the scan fails.
+# Private ops details belong in the PRIVATE amruthjakku/astrivya-infra repo.
+
+[[rules]]
+id = "astrivya-private-registry-host"
+description = "Private Verdaccio registry hostname (npm.astrivya.ai)"
+regex = '''npm\.astrivya\.ai'''
+keywords = ["astrivya"]
+
+[[rules]]
+id = "astrivya-verdaccio-credentials"
+description = "Private registry credential names (VERDACCIO_ADMIN_*)"
+regex = '''VERDACCIO_(ADMIN_USER|ADMIN_PASSWORD)'''
+keywords = ["VERDACCIO"]
+
+[[rules]]
+id = "astrivya-vm-ip"
+description = "Production VM public IP"
+regex = '''70\.153\.18\.113'''
+keywords = ["70.153"]
+
+[[rules]]
+id = "astrivya-vm-user"
+description = "Production VM username (azureuser)"
+regex = '''azureuser'''
+keywords = ["azureuser"]
+
+[[rules]]
+id = "astrivya-deploy-keys"
+description = "VM deploy-key names (astrivya_infra / astrivya_vm / astrivya_github / astrivya_deploy)"
+regex = '''astrivya_(infra|vm|github|deploy)'''
+keywords = ["astrivya"]
+
+[[rules]]
+id = "astrivya-basic-auth-key"
+description = "Legacy npm Basic-auth key (//host/:_auth=<base64>) used by the private registry"
+regex = '''//[a-zA-Z0-9.\-]+/:_auth='''
+keywords = ["_auth"]
+
+[[rules]]
+id = "astrivya-env-file-path"
+description = "Production env file path on the VM"
+regex = '''/home/[a-z0-9]+/astrivya/\.env'''
+keywords = ["astrivya"]
+
+# ---- Allowlist ----
 [allowlist]
-description = "PostHog public capture key (phc_ prefix) embedded for client-side telemetry"
+description = "PostHog public capture key (client-side by design) + the scan's own config/baseline files"
+paths = [
+  '''\.gitleaks\.toml''',
+  '''\.gitleaks-baseline\.json''',
+]
 regexes = [
   '''phc_BcfHVZzTt4GRwwkMJKgBEnCEuyF8nbDzzQxy6VBJZwfE''',
 ]
