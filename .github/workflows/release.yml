@@ -52,6 +52,9 @@ jobs:
           BRANCH="release-please--branches--${GITHUB_REF_NAME}"
           git fetch origin "$BRANCH" || exit 0  # no release PR (nothing to release)
           git checkout -B "$BRANCH" "origin/$BRANCH"
+          # Always use main's script: the release branch may predate a script fix.
+          git fetch origin main
+          git show origin/main:scripts/align-release-ranges.mjs > scripts/align-release-ranges.mjs
           node scripts/align-release-ranges.mjs
           npm install --package-lock-only --no-audit --no-fund
           npx -y @biomejs/biome@1.9.4 format --write packages/*/package.json
