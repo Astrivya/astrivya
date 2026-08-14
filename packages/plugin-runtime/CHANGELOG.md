@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/Astrivya/astrivya/compare/plugin-runtime-v0.3.0...plugin-runtime-v0.4.0) (2026-08-14)
+
+
+### Features
+
+* **plugin-runtime:** auto-install plugin deps + cloud smoke release gate ([dc5a32b](https://github.com/Astrivya/astrivya/commit/dc5a32b1e0f07f949d8fa1dfa83fa68731a2710e))
+* **plugin-runtime:** auto-install plugin deps on download + release smoke gate ([20d63b2](https://github.com/Astrivya/astrivya/commit/20d63b26d803ab253e0b8071015eda658636591e))
+
+
+### Bug Fixes
+
+* **cli:** load cloud plugin commands on Windows + cloud smoke test ([#21](https://github.com/Astrivya/astrivya/issues/21)) ([e1e7efb](https://github.com/Astrivya/astrivya/commit/e1e7efb7a16306fc9d5a7704068799367a0df153))
+
 ## [0.3.0](https://github.com/Astrivya/astrivya/compare/plugin-runtime-v0.2.1...plugin-runtime-v0.3.0) (2026-08-13)
 
 

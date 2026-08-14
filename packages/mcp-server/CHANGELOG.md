@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/Astrivya/astrivya/compare/mcp-server-v0.3.0...mcp-server-v0.4.0) (2026-08-14)
+
+
+### Features
+
+* **cli,mcp-server:** anonymous opt-out usage telemetry via PostHog ([a603a09](https://github.com/Astrivya/astrivya/commit/a603a0912d092f901977b0e4717387654ad9395a))
+* **cli,mcp-server:** anonymous opt-out usage telemetry via PostHog ([cdddc95](https://github.com/Astrivya/astrivya/commit/cdddc952c2b3c25b9259d2ddea7916d772da3411))
+* **cli,mcp-server:** user-end auto-update — prompt install, silent mode, plugin auto-sync ([5e0a295](https://github.com/Astrivya/astrivya/commit/5e0a29511131491d85d72c22fa0c83bec1f2fc8e))
+* **mcp,cli,atlas:** per-session registry, HTTP lifecycle, journal rendering fix ([061fdf6](https://github.com/Astrivya/astrivya/commit/061fdf6f0a0fa9d04e414d97d765ca2525f34ce9))
+
+
+### Bug Fixes
+
+* **cli,mcp:** align cloud endpoints with api.astrivya.ai + contract drift gate ([805dbaf](https://github.com/Astrivya/astrivya/commit/805dbaf1cd19fb83ca479b2408245e59efb626e0))
+* **cli,mcp:** align cloud endpoints with api.astrivya.ai + contract drift gate ([234a160](https://github.com/Astrivya/astrivya/commit/234a160d7c769c048b1cb53935e3a63d8bc29011))
+
 ## [0.3.0](https://github.com/Astrivya/astrivya/compare/mcp-server-v0.2.1...mcp-server-v0.3.0) (2026-08-13)
 
 
