@@ -116,6 +116,14 @@ Monorepo release automation is handled by **release-please** (`.github/release-p
 - Version injected via tsup `define` (source of truth `src/lib/version.ts`). Opt-outs: `CI`, `NO_UPDATE_NOTIFIER`, `ASTRIVYA_MCP_NO_UPDATE_CHECK`.
 - Cache lives at `envPaths("astrivya-mcp").cache/update.json`; notifies at most once per version.
 
+## Embeddings, Watcher & Prompts (2026-08-14)
+
+- **BYOK embedder chain** (`packages/akg-indexer/src/embedder.ts`): `EmbedderStrategy = "local" | "llm" | "none"`, resolved **once** at `init` so index + query vectors share a dimension (local ONNX 384 vs BYOK OpenAI 1536 — never mix). Local-first by default, only attempted when `onnx/model.onnx` exists; `ASTRIVYA_EMBED_BYOK=1` (+ `ASTRIVYA_OPENAI_KEY`) prefers the OpenAI `text-embedding-3-small` API (raw fetch, no SDK, 30s timeout, normalize). Anthropic keys never produce llm (no native embedding API). `akg-query.ts` guards `emb.available()` — strategy `none` means keyword-only search, never an embed attempt. `tryLocal` uses dynamic `await import("@xenova/transformers")` so vitest `vi.mock` can intercept it (mocking `require()` does not work); tsup emits `require` in the CJS bundle so the peer dep stays lazy in production.
+- **Cloud vector merge** (`packages/mcp-server/src/handlers.ts`): `cloudSearchNodes` sends the query `embedding` in the POST body; `search_memories` fuses local + cloud node lists via `reciprocalRankFusion` (k=60, dedupe by id/chunkId/nodeId/filePath, exported for tests) and applies the `active_file` boost to the fused list (was: boost written to `results` while returning `merged`).
+- **Shared Watcher** (`packages/akg-indexer/src/watcher.ts`, exported from akg-indexer): recursive `fs.watch`, 600ms debounce, ignores hidden dirs + `node_modules/dist/out/coverage/graphify-out/.astrivya` + `.json/.lock/.db/.log/.tmp/.sqlite`, `start()` returns boolean, idempotent `stop()`. Used by `astrivya serve` (atlas) and by the mcp-server HTTP transport when `ASTRIVYA_WATCH=1` (`startWorkspaceWatcher` in `packages/mcp-server/src/index.ts`): change → `indexFile` → `embedAllChunks` → `refreshContextDigest` → journal `auto_index {mode:"watch"}`; stopped on shutdown. `indexFile` only indexes `.md` under `docs/adr` — other files are intentionally ignored.
+- **MCP prompts** (`packages/mcp-server/src/prompts.ts`): `session_start`, `remember_after_task`, `decision_required` exposed via `prompts/list` + `prompts/get` (arguments interpolated), advertised in `initialize` capabilities. The `session_start` prompt steers clients to `get_context_digest` + `search_memories` for context.
+- **Env vars**: `ASTRIVYA_EMBED_BYOK=1`, `ASTRIVYA_EMBED_MODEL` (default `text-embedding-3-small`), `ASTRIVYA_OPENAI_KEY` (already), `ASTRIVYA_WATCH=1` (HTTP watcher).
+
 ## Key Env Vars
 
 | Var | Used By | Description |
