@@ -440,10 +440,7 @@ async function main() {
     "`credits --json` without auth says not logged in",
   );
   const hist = run(["credits", "history"], { cwd: ws14, env: env14 });
-  assert(
-    hist.status !== 0 && /not logged in/i.test(hist.stdout),
-    "`credits history` without auth says not logged in",
-  );
+  assert(hist.status !== 0 && /not logged in/i.test(hist.stdout), "`credits history` without auth says not logged in");
   run(["config", "set", "offlineMode", "true"], { cwd: ws14, env: env14 });
   const offline = run(["credits"], { cwd: ws14, env: env14 });
   assert(offline.stdout.includes("only available in online mode"), "`credits` respects offline mode");
