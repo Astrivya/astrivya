@@ -1,7 +1,7 @@
 {
   "name": "@astrivya/mcp-server",
   "version": "0.5.0",
-  "description": "Model Context Protocol server for Astrivya Knowledge Graph — 18 tools for AI coding agents to read/write/query the AKG",
+  "description": "Model Context Protocol server for Astrivya Knowledge Graph — 21 tools for AI coding agents to read/write/query the AKG and talk to each other over the Agent Mesh",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

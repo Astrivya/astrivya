@@ -138,4 +138,90 @@ describe("mcp-server status module", () => {
     status.initStatus({ workspace: tmpDir, mode: "stdio", version: "1.0.0" });
     expect(status.readJournal(path.join(tmpDir, "nope"), 10)).toEqual([]);
   });
+
+  it("captures clientInfo from the initialize handshake onto sessions", () => {
+    status.initStatus({ workspace: tmpDir, mode: "stdio", version: "1.0.0" });
+    status.captureClientInfo("stdio:123", "opencode", "0.5.0");
+    const sid = status.recordSessionStart({ id: "stdio:123" });
+    const info = status.getClientInfo(sid);
+    expect(info.client).toBe("opencode");
+    expect(info.version).toBe("0.5.0");
+    const sess = status.getStatus().sessionsList.find((s) => s.id === sid);
+    expect(sess?.client).toBe("opencode");
+    expect(sess?.clientVersion).toBe("0.5.0");
+  });
+
+  it("merges env identity with identify_agent overrides and journals the event", () => {
+    status.initStatus({ workspace: tmpDir, mode: "stdio", version: "1.0.0" });
+    vi.stubEnv("ASTRIVYA_AGENT_NAME", "mesh-builder");
+    vi.stubEnv("ASTRIVYA_AGENT_MODEL", "claude-sonnet-4");
+    const sid = status.recordSessionStart({ id: "stdio:abc" });
+    const merged = status.setAgentIdentity(sid, { model: "opencode/claude-sonnet-4", project: "astrivya" });
+    expect(merged.name).toBe("mesh-builder"); // env fallback
+    expect(merged.model).toBe("opencode/claude-sonnet-4"); // explicit wins
+    expect(merged.project).toBe("astrivya");
+    expect(status.getAgentIdentity(sid).provider).toBeNull();
+
+    const events = status.readJournal(tmpDir, 100);
+    const idEvent = events.find((e) => e.type === "agent_identify");
+    expect(idEvent).toBeTruthy();
+    expect(idEvent?.session_id).toBe(sid);
+    expect(idEvent?.name).toBe("mesh-builder");
+    expect(idEvent?.project).toBe("astrivya");
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps self-registered identity even without a session row", () => {
+    status.initStatus({ workspace: tmpDir, mode: "stdio", version: "1.0.0" });
+    status.setAgentIdentity("stdio:ghost", { name: "ghost", model: "m" });
+    expect(status.getAgentIdentity("stdio:ghost")).toMatchObject({ name: "ghost", model: "m" });
+  });
+
+  it("reads and filters the agent mesh feed from the journal", () => {
+    status.initStatus({ workspace: tmpDir, mode: "stdio", version: "1.0.0" });
+    const sid = status.recordSessionStart({ id: "stdio:1" });
+    status.setAgentIdentity(sid, { name: "alpha" });
+    status.recordEvent(
+      "agent_message",
+      {
+        id: "mesh::1",
+        from: sid,
+        from_name: "alpha",
+        to: "all",
+        msg_type: "code-conflict",
+        urgency: "high",
+        text: "I'm editing cli.ts:12-40",
+        thread_id: "release-1",
+        pid: process.pid,
+      },
+      tmpDir,
+    );
+    status.recordEvent(
+      "agent_message",
+      {
+        id: "mesh::2",
+        from: "stdio:2",
+        from_name: "beta",
+        to: "all",
+        msg_type: "general",
+        text: "ok, deferring",
+        thread_id: "release-1",
+        pid: 999999,
+      },
+      tmpDir,
+    );
+
+    const all = status.readMeshMessages(tmpDir, {});
+    expect(all).toHaveLength(2);
+    expect(all[0].threadId).toBe("release-1");
+    expect(all[0].text).toContain("cli.ts:12-40");
+    expect(all[1].text).toBe("ok, deferring");
+
+    expect(status.readMeshMessages(tmpDir, { type: "code-conflict" })).toHaveLength(1);
+    expect(status.readMeshMessages(tmpDir, { agent: sid })).toHaveLength(1);
+    expect(status.readMeshMessages(tmpDir, { since: new Date(Date.now() + 1000).toISOString() })).toHaveLength(0);
+    const limited = status.readMeshMessages(tmpDir, { limit: 1 });
+    expect(limited).toHaveLength(1);
+    expect(limited[0].id).toBe("mesh::2");
+  });
 });

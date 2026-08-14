@@ -11,10 +11,13 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import {
   CallToolRequestSchema,
   GetPromptRequestSchema,
+  InitializeRequestSchema,
+  LATEST_PROTOCOL_VERSION,
   ListPromptsRequestSchema,
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
+  SUPPORTED_PROTOCOL_VERSIONS,
 } from "@modelcontextprotocol/sdk/types.js";
 import envPaths from "env-paths";
 import { getByokProvider, getConfig } from "./api";
@@ -32,7 +35,9 @@ import { loadToolPlugins } from "./plugin";
 import { PROMPT_DEFINITIONS, buildPromptPrompt } from "./prompts";
 import { RESOURCE_DEFINITIONS, buildToolList } from "./schemas";
 import {
+  captureClientInfo,
   ensureSession,
+  getClientInfo,
   getStatus,
   initStatus,
   readJournal,
@@ -55,6 +60,23 @@ function createServer() {
     prompts: PROMPT_DEFINITIONS,
   }));
 
+  // Capture clientInfo (agent name/version) from the handshake and negotiate
+  // the protocol version exactly like the SDK default would.
+  server.setRequestHandler(InitializeRequestSchema, async (request, extra) => {
+    const ci = request.params.clientInfo;
+    const sessionId = extra?.sessionId ?? `stdio:${process.pid}`;
+    captureClientInfo(sessionId, ci?.name ?? null, ci?.version ?? null);
+    const requestedVersion = request.params.protocolVersion;
+    const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion)
+      ? requestedVersion
+      : LATEST_PROTOCOL_VERSION;
+    return {
+      protocolVersion,
+      capabilities: { tools: {}, resources: {}, prompts: {} },
+      serverInfo: { name: "astrivya-mcp-server", version: CURRENT_VERSION },
+    };
+  });
+
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     const def = PROMPT_DEFINITIONS.find((p) => p.name === name);
@@ -75,10 +97,14 @@ function createServer() {
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args } = request.params;
+    const sessionId = extra?.sessionId || `stdio:${process.pid}`;
     const startedAt = Date.now();
     let ok = false;
     try {
-      const result = await handleToolCall(name, args);
+      const result = await handleToolCall(name, args, {
+        sessionId,
+        clientVersion: getClientInfo(sessionId).version,
+      });
       ok = !(result as any)?.isError;
       return result;
     } catch (err: unknown) {
@@ -89,7 +115,7 @@ function createServer() {
       };
     } finally {
       recordToolCall(name, ok, {
-        sessionId: extra?.sessionId || `stdio:${process.pid}`,
+        sessionId,
         durationMs: Date.now() - startedAt,
       });
     }
@@ -464,5 +490,5 @@ if (require.main === module) {
   });
 }
 
-export { runHttpServer, runStdioServer };
+export { createServer, runHttpServer, runStdioServer };
 export { getStatus, journalPath, readJournal } from "./status";

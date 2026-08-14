@@ -196,6 +196,91 @@ export const CORE_TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    name: "identify_agent",
+    description:
+      "Register this session's identity on the Agent Mesh roster: model, provider, session name, cwd and project. Env vars (ASTRIVYA_AGENT_NAME/_MODEL/_PROVIDER/_SESSION) are auto-merged; explicit values override them. Run once at session start so other agents and Atlas can tell you apart.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Display name (defaults to the MCP client name or ASTRIVYA_AGENT_NAME)." },
+        model: { type: "string", description: "Model id, e.g. 'opencode/claude-sonnet-4' or ASTRIVYA_AGENT_MODEL." },
+        provider: {
+          type: "string",
+          description: "Provider name, e.g. 'opencode', 'anthropic', or ASTRIVYA_AGENT_PROVIDER.",
+        },
+        session: {
+          type: "string",
+          description: "Human session label (short, e.g. 'mesh-build') or ASTRIVYA_AGENT_SESSION.",
+        },
+        cwd: { type: "string", description: "Working directory of the agent process." },
+        project: { type: "string", description: "Project/repo name the agent is working in." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "agent_message",
+    description:
+      "Send a message to other agents via the Agent Mesh (A2A). Messages land in the shared workspace journal and are indexed into the knowledge graph (searchable via search_memories); Atlas renders them as a threaded feed. Use `type` to signal coordination intent (code-conflict, release, tag, ci, deploy, vm, git-push, review, blocker, question). Reply in the same `thread_id`; set `in_reply_to` to a prior message id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          description: "Message body (max 8000 chars). Be specific: files, branches, commands, timings.",
+        },
+        to: { type: "string", description: "'all' (default) or a specific agent session id." },
+        type: {
+          type: "string",
+          enum: [
+            "general",
+            "code-conflict",
+            "release",
+            "tag",
+            "ci",
+            "deploy",
+            "vm",
+            "git-push",
+            "review",
+            "blocker",
+            "question",
+          ],
+          description: "Message intent (default: general).",
+        },
+        thread_id: { type: "string", description: "Thread id to continue a conversation (e.g. a release name)." },
+        in_reply_to: { type: "string", description: "Id of the message this replies to." },
+        context: {
+          type: "object",
+          properties: {
+            files: { type: "array", items: { type: "string" }, description: "Files this concerns (max 20)." },
+            repos: { type: "array", items: { type: "string" }, description: "Repos this concerns." },
+            branch: { type: "string", description: "Branch name." },
+            lineRange: { type: "string", description: "Line range, e.g. 'packages/cli/src/x.ts:12-40'." },
+            topic: { type: "string", description: "Free-form topic label." },
+          },
+          description: "Structured context (files/repos/branch/line range) for coordination.",
+        },
+        urgency: { type: "string", enum: ["info", "low", "normal", "high"], description: "Urgency (default: normal)." },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "mesh_read",
+    description:
+      "Read the Agent Mesh feed: agent-to-agent messages from the shared workspace journal, newest last (conversation order). Check this before editing files, and group by threadId to follow conversations. Filters: since (ISO ts), agent (sender session id), type.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max messages (default: 100, max 500)." },
+        since: { type: "string", description: "Only messages after this ISO timestamp." },
+        agent: { type: "string", description: "Only messages from this agent session id." },
+        type: { type: "string", description: "Only messages of this type (e.g. code-conflict)." },
+      },
+      required: [],
+    },
+  },
 ];
 
 /**
@@ -243,6 +328,13 @@ const TOOL_META: Record<
   },
   get_context_digest: { when: "Session start — compact prose digest (<1.5k tokens)", cost: "cheap", quality: "high" },
   get_workspace_updates: { when: "Mid-session catch-up or delta polling", cost: "cheap", quality: "medium" },
+  identify_agent: { when: "Once at session start to join the Agent Mesh roster", cost: "cheap", quality: "high" },
+  agent_message: {
+    when: "To coordinate with other agents (conflicts, releases, CIs, pushes)",
+    cost: "cheap",
+    quality: "high",
+  },
+  mesh_read: { when: "Before editing shared files — see what other agents announced", cost: "cheap", quality: "high" },
 };
 
 function enrichDescription(name: string, description: string): string {

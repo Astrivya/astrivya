@@ -2,9 +2,20 @@ import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AkgQuery, type AkgStorage } from "@astrivya/akg-core";
+import { AkgEmbedder } from "@astrivya/akg-indexer";
+import envPaths from "env-paths";
 import { API_PATHS, getConfig, syncCall } from "./api";
 import type { ToolPlugin } from "./plugin";
-import { getStatus, readJournal } from "./status";
+import {
+  MESH_MESSAGE_TYPES,
+  envAgentIdentity,
+  getAgentIdentity,
+  getStatus,
+  readJournal,
+  readMeshMessages,
+  recordEvent,
+  setAgentIdentity,
+} from "./status";
 
 let storage: AkgStorage | null = null;
 let query: AkgQuery | null = null;
@@ -16,6 +27,12 @@ const CLOUD_URL = process.env.ASTRIVYA_CLOUD_URL || "";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type ToolResult = { content: Array<{ type: string; text: string }>; isError?: boolean };
+
+/** Per-call context threaded from the transport (session id, client version). */
+export interface ToolCallContext {
+  sessionId?: string;
+  clientVersion?: string | null;
+}
 
 interface DigestFreshness {
   fetchedAt: string;
@@ -366,10 +383,204 @@ export function reciprocalRankFusion(local: any[], cloud: any[], limit: number):
 }
 
 // ---------------------------------------------------------------------------
+// Agent Mesh — A2A identity + messaging over the shared workspace journal.
+// Messages are journaled (`agent_message` events), indexed into the AKG as
+// `agent_message` nodes + chunks (semantically searchable), and surfaced to
+// Atlas via the CLI's `/api/mcp/mesh` route (journal-direct, no live server).
+// ---------------------------------------------------------------------------
+
+const MAX_MESH_TEXT = 8000;
+const MAX_MESH_FILES = 20;
+
+function meshSessionId(ctx?: ToolCallContext): string {
+  return ctx?.sessionId ?? `stdio:${process.pid}`;
+}
+
+/** Embed pending chunks (fire-and-forget, best-effort) — mirrors the watcher. */
+function meshEmbedPending(): void {
+  if (!storage || !workspacePath) return;
+  void (async () => {
+    try {
+      const modelsDir = path.join(envPaths("astrivya", { suffix: "" }).config, "models");
+      await new AkgEmbedder().embedAllChunks(storage as AkgStorage, modelsDir);
+    } catch {
+      // embeddings are best-effort — keyword search still works
+    }
+  })();
+}
+
+/** Index a mesh message into the AKG as a searchable node + chunk. */
+function meshIndexMessage(msg: Record<string, unknown>, agentNodeId: string): void {
+  if (!storage) return;
+  try {
+    const now = Date.now();
+    const text = String(msg.text ?? "");
+    const id = String(msg.id ?? "");
+    storage.upsertNode({
+      id,
+      label: text.length > 72 ? `${text.slice(0, 72)}\u2026` : text,
+      type: "agent_message",
+      content: text,
+      metadata: JSON.stringify({
+        type: msg.type,
+        thread_id: msg.thread_id ?? null,
+        from: msg.from,
+        to: msg.to,
+        urgency: msg.urgency,
+        ts: msg.ts,
+      }),
+      createdAt: now,
+      updatedAt: now,
+    });
+    storage.upsertChunk({
+      id: `chunk:${id}`,
+      nodeId: id,
+      filePath: "mesh://messages",
+      content: text,
+      createdAt: now,
+      updatedAt: now,
+    });
+    storage.upsertNode({
+      id: agentNodeId,
+      label: String(msg.from_name ?? msg.from ?? "agent"),
+      type: "agent",
+      metadata: JSON.stringify({ session_id: msg.from }),
+      createdAt: now,
+      updatedAt: now,
+    });
+    storage.addEdge({ source: agentNodeId, target: id, relation: "generated" });
+    meshEmbedPending();
+  } catch {
+    // AKG indexing is best-effort — the journal row is the source of truth
+  }
+}
+
+async function handleIdentifyAgent(args: any, ctx?: ToolCallContext): Promise<ToolResult> {
+  const sessionId = meshSessionId(ctx);
+  const merged = setAgentIdentity(sessionId, {
+    name: typeof args?.name === "string" ? args.name : undefined,
+    model: typeof args?.model === "string" ? args.model : undefined,
+    provider: typeof args?.provider === "string" ? args.provider : undefined,
+    session: typeof args?.session === "string" ? args.session : undefined,
+    cwd: typeof args?.cwd === "string" ? args.cwd : undefined,
+    project: typeof args?.project === "string" ? args.project : undefined,
+  });
+  const display = [merged.name, merged.model && `(${merged.model})`].filter(Boolean).join(" ") || sessionId;
+  return envelope({ identity: merged, sessionId }, { note: `Registered as ${display} on the Agent Mesh roster.` });
+}
+
+async function handleAgentMessage(args: any, ctx?: ToolCallContext): Promise<ToolResult> {
+  const sessionId = meshSessionId(ctx);
+  const text = typeof args?.text === "string" ? args.text.trim() : "";
+  if (!text) {
+    return {
+      content: [{ type: "text", text: "Error: `text` is required and must be a non-empty string." }],
+      isError: true,
+    };
+  }
+  if (text.length > MAX_MESH_TEXT) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error: \`text\` exceeds the ${MAX_MESH_TEXT}-character mesh limit (${text.length} chars).`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const type = MESH_MESSAGE_TYPES.includes(args?.type as never) ? String(args.type) : "general";
+  const urgency = ["info", "low", "normal", "high"].includes(args?.urgency as never) ? String(args.urgency) : "normal";
+  const to = typeof args?.to === "string" && args.to.trim() ? args.to.trim() : "all";
+  const threadId = typeof args?.thread_id === "string" && args.thread_id.trim() ? args.thread_id.trim() : null;
+  const inReplyTo = typeof args?.in_reply_to === "string" && args.in_reply_to.trim() ? args.in_reply_to.trim() : null;
+
+  let context: Record<string, unknown> | null = null;
+  if (args?.context && typeof args.context === "object") {
+    const c = args.context as Record<string, unknown>;
+    const files = Array.isArray(c.files)
+      ? c.files.filter((f): f is string => typeof f === "string").slice(0, MAX_MESH_FILES)
+      : [];
+    const repos = Array.isArray(c.repos) ? c.repos.filter((r): r is string => typeof r === "string").slice(0, 10) : [];
+    context = {
+      ...(files.length ? { files } : {}),
+      ...(repos.length ? { repos } : {}),
+      ...(typeof c.branch === "string" && c.branch ? { branch: c.branch } : {}),
+      ...(typeof c.lineRange === "string" && c.lineRange ? { lineRange: c.lineRange } : {}),
+      ...(typeof c.topic === "string" && c.topic ? { topic: c.topic } : {}),
+    };
+    if (Object.keys(context).length === 0) context = null;
+  }
+
+  // Auto-register a sender identity when none was announced (env-derived).
+  const identity = getAgentIdentity(sessionId);
+  if (!identity.name && !identity.model && !identity.provider) {
+    setAgentIdentity(sessionId, envAgentIdentity());
+  }
+  const mergedIdentity = getAgentIdentity(sessionId);
+
+  const id = `mesh::${Date.now().toString(36)}_${crypto.randomBytes(3).toString("hex")}`;
+  const message: Record<string, unknown> = {
+    id,
+    from: sessionId,
+    from_name: mergedIdentity.name,
+    client: ctx?.clientVersion ? `${mergedIdentity.name ?? ctx.clientVersion}` : mergedIdentity.name,
+    to,
+    msg_type: type,
+    urgency,
+    text,
+    thread_id: threadId,
+    in_reply_to: inReplyTo,
+    context,
+    pid: process.pid,
+  };
+  recordEvent("agent_message", message, workspacePath);
+  meshIndexMessage(message, `agent:${sessionId}`);
+
+  const target = to === "all" ? "all agents" : to;
+  return envelope(
+    { id, thread_id: threadId, to, type, urgency },
+    {
+      source: "local",
+      cost: "cheap",
+      quality: "high",
+      note: `Sent to ${target} via the Agent Mesh (${type}). Peer agents see it via \`mesh_read\`; it is searchable through \`search_memories\`.`,
+    },
+  );
+}
+
+async function handleMeshRead(args: any): Promise<ToolResult> {
+  if (!workspacePath) {
+    return { content: [{ type: "text", text: "Error: no workspace journal available." }], isError: true };
+  }
+  const limit = typeof args?.limit === "number" ? Math.floor(args.limit) : 100;
+  const messages = readMeshMessages(workspacePath, {
+    limit,
+    since: typeof args?.since === "string" ? args.since : undefined,
+    agent: typeof args?.agent === "string" && args.agent ? args.agent : undefined,
+    type: typeof args?.type === "string" && args.type ? args.type : undefined,
+  });
+  const senders = [...new Set(messages.map((m) => m.from))];
+  return envelope(
+    { messages, senders, count: messages.length },
+    {
+      source: "local",
+      cost: "cheap",
+      quality: "high",
+      note: `Agent Mesh feed: ${messages.length} message(s) from ${senders.length} agent(s). Group by \`threadId\` for conversations.`,
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Local tool handlers
 // ---------------------------------------------------------------------------
 
-const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
+const LOCAL_HANDLERS: Record<string, (args: any, ctx?: ToolCallContext) => Promise<ToolResult>> = {
+  identify_agent: (args, ctx) => handleIdentifyAgent(args, ctx),
+  agent_message: (args, ctx) => handleAgentMessage(args, ctx),
+  mesh_read: (args) => handleMeshRead(args),
   search_memories: async (args) => {
     const q = args?.query || "";
     const limit = args?.limit || 8;
@@ -807,11 +1018,11 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
   },
 };
 
-export async function handleToolCall(name: string, args: any): Promise<ToolResult> {
+export async function handleToolCall(name: string, args: any, ctx?: ToolCallContext): Promise<ToolResult> {
   try {
     const handler = LOCAL_HANDLERS[name];
     if (handler) {
-      return await handler(args);
+      return await handler(args, ctx);
     }
 
     const plugin = _toolPlugins.find((p) => p.name === name);
