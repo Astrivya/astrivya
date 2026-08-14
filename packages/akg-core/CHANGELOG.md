@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/Astrivya/astrivya/compare/akg-core-v0.3.0...akg-core-v0.4.0) (2026-08-14)
+
+
+### Features
+
+* **akg,cli:** repo/person identity graph, file-target search, storage v3 ([ace76c2](https://github.com/Astrivya/astrivya/commit/ace76c2c7c0be4d6bf0f4a0670a39a366d9bdcd0))
+* **cli,mcp-server:** anonymous opt-out usage telemetry via PostHog ([a603a09](https://github.com/Astrivya/astrivya/commit/a603a0912d092f901977b0e4717387654ad9395a))
+
 ## [0.3.0](https://github.com/Astrivya/astrivya/compare/akg-core-v0.2.1...akg-core-v0.3.0) (2026-08-13)
 
 

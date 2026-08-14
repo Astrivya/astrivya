@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/Astrivya/astrivya/compare/akg-indexer-v0.3.0...akg-indexer-v0.4.0) (2026-08-14)
+
+
+### Features
+
+* **akg-indexer:** expose Watcher + embedder types from package entry ([5184235](https://github.com/Astrivya/astrivya/commit/5184235564b3158bbc4356029bc9c1a42441ca3b))
+* **akg,cli:** repo/person identity graph, file-target search, storage v3 ([ace76c2](https://github.com/Astrivya/astrivya/commit/ace76c2c7c0be4d6bf0f4a0670a39a366d9bdcd0))
+* **cli,mcp-server:** anonymous opt-out usage telemetry via PostHog ([a603a09](https://github.com/Astrivya/astrivya/commit/a603a0912d092f901977b0e4717387654ad9395a))
+
+
+### Bug Fixes
+
+* **akg-indexer:** drop embedder type exports not yet in committed embedder ([7245405](https://github.com/Astrivya/astrivya/commit/72454056a14c2b4cd108b164bb66e7f2400043f5))
+
 ## [0.3.0](https://github.com/Astrivya/astrivya/compare/akg-indexer-v0.2.1...akg-indexer-v0.3.0) (2026-08-13)
 
 
