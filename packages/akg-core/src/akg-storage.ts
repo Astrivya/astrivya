@@ -12,6 +12,7 @@ import { getErrorMessage } from "./errors";
 function guessStubType(id: string): AkgNode["type"] {
   if (id.startsWith("dependency::")) return "dependency";
   if (id.startsWith("person::")) return "person";
+  if (id.startsWith("repo::")) return "repo";
   if (id.startsWith("workspace::")) return "workspace";
   if (id.startsWith("folder::")) return "folder";
   if (id.startsWith("class::")) return "class";
@@ -141,7 +142,9 @@ export class AkgStorage {
       CREATE TABLE IF NOT EXISTS persons (
         id          TEXT PRIMARY KEY,
         name        TEXT,
-        email       TEXT
+        email       TEXT,
+        role        TEXT DEFAULT 'contributor',
+        is_primary  INTEGER DEFAULT 0
       );
 
       CREATE TABLE IF NOT EXISTS adr_links (
@@ -157,7 +160,7 @@ export class AkgStorage {
     `;
 
     this.db.run(schemaSql);
-    this.db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '2');");
+    this.db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '3');");
   }
 
   private runMigrations(): void {
@@ -199,6 +202,17 @@ export class AkgStorage {
         this.saveToDisk();
       } catch (err: unknown) {
         console.warn(`Migration to version 2 failed: ${getErrorMessage(err)}`);
+      }
+    }
+
+    if (version < 3) {
+      try {
+        this.run("ALTER TABLE persons ADD COLUMN role TEXT DEFAULT 'contributor';");
+        this.run("ALTER TABLE persons ADD COLUMN is_primary INTEGER DEFAULT 0;");
+        this.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', '3');");
+        this.saveToDisk();
+      } catch (err: unknown) {
+        console.warn(`Migration to version 3 failed: ${getErrorMessage(err)}`);
       }
     }
   }
@@ -491,12 +505,54 @@ export class AkgStorage {
     this.maybeSave();
   }
 
-  addPerson(person: { id: string; name?: string; email?: string }): void {
+  addPerson(person: {
+    id: string;
+    name?: string;
+    email?: string;
+    role?: "owner" | "member" | "contributor";
+    isPrimary?: boolean;
+  }): void {
     const sql = `
-      INSERT OR REPLACE INTO persons (id, name, email) VALUES (?, ?, ?);
+      INSERT OR REPLACE INTO persons (id, name, email, role, is_primary) VALUES (?, ?, ?, ?, ?);
     `;
-    this.run(sql, [person.id, person.name || person.id.replace("person::", ""), person.email || null]);
+    this.run(sql, [
+      person.id,
+      person.name || person.id.replace("person::", ""),
+      person.email || null,
+      person.role ?? "contributor",
+      person.isPrimary ? 1 : 0,
+    ]);
     this.maybeSave();
+  }
+
+  /** All persons, ordered by role (owner first) then name. */
+  listPersons(): { id: string; name: string; email: string | null; role: string; isPrimary: boolean }[] {
+    const rows = this.runQuery(
+      "SELECT id, name, email, role, is_primary FROM persons ORDER BY is_primary DESC, CASE role WHEN 'owner' THEN 0 WHEN 'member' THEN 1 ELSE 2 END, name;",
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      email: r.email ?? null,
+      role: r.role ?? "contributor",
+      isPrimary: Boolean(r.is_primary),
+    }));
+  }
+
+  /** All repo nodes (type='repo') with their metadata. */
+  listRepos(): { id: string; label: string; metadata: any }[] {
+    const rows = this.runQuery("SELECT id, label, metadata FROM nodes WHERE type = 'repo';");
+    return rows.map((r) => {
+      let metadata: any = {};
+      if (r.metadata) {
+        try {
+          metadata = JSON.parse(r.metadata);
+        } catch {
+          metadata = {};
+        }
+      }
+      return { id: r.id, label: r.label, metadata };
+    });
   }
 
   addAdrLink(adrNodeId: string, codeNodeId: string): void {

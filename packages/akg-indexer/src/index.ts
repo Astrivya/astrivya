@@ -22,6 +22,8 @@ export {
   summarizeUnits,
   WORKSPACE_MARKER_FILES,
 } from "./workspace-map";
+export { buildIdentityGraph } from "./identity";
+export type { IdentityBuildResult, RepoIdentity } from "./identity";
 export type {
   FileIndexResult,
   IndexPhase,

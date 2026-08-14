@@ -1,6 +1,7 @@
 /** Supported node types in the knowledge graph. */
 export type NodeType =
   | "workspace"
+  | "repo"
   | "folder"
   | "file"
   | "function"
@@ -29,6 +30,8 @@ export type RelationType =
   | "references"
   | "owns"
   | "created_by"
+  | "contributes_to"
+  | "works_in"
   | "decides"
   | "supersedes"
   | "blocks"
@@ -94,6 +97,8 @@ export interface QueryIntent {
   ftsWeight: number;
   semanticWeight: number;
   graphWeight: number;
+  /** Exact/partial file-name matching (used when the query names a file). */
+  fileWeight: number;
 }
 
 export interface RetrievalResult {
@@ -104,7 +109,7 @@ export interface RetrievalResult {
   endLine?: number;
   content: string;
   score: number;
-  source: "fts" | "semantic" | "graph";
+  source: "fts" | "semantic" | "graph" | "file";
   /** Unix ms when the item was first indexed. */
   createdAt?: number;
   /** Unix ms when the item was last verified/re-indexed. */

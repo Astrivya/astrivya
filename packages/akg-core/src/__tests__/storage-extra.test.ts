@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import initSqlJs from "sql.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { AkgStorage } from "../index";
 import { cleanupTempWorkspace, createTempWorkspace } from "./helpers";
@@ -107,6 +108,42 @@ describe("AkgStorage extras", () => {
       storage.close();
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates a v2 persons table to v3 (role + is_primary with defaults)", async () => {
+    const dir = createTempWorkspace();
+    try {
+      const astrivyaDir = path.join(dir, ".astrivya");
+      fs.mkdirSync(astrivyaDir, { recursive: true });
+
+      // Hand-craft a v2 database: persons without role/is_primary, schema 2.
+      const SQL = await initSqlJs();
+      const db = new SQL.Database();
+      db.run("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);");
+      db.run("INSERT INTO metadata (key, value) VALUES ('schema_version', '2');");
+      db.run("CREATE TABLE persons (id TEXT PRIMARY KEY, name TEXT, email TEXT);");
+      db.run("INSERT INTO persons (id, name, email) VALUES ('person::alice', 'Alice', 'alice@example.com');");
+      fs.writeFileSync(path.join(astrivyaDir, "akg.db"), Buffer.from(db.export()));
+      db.close();
+
+      const storage = new AkgStorage();
+      await storage.init(dir);
+
+      const alice = storage.listPersons().find((p) => p.id === "person::alice")!;
+      expect(alice.role).toBe("contributor");
+      expect(alice.isPrimary).toBe(false);
+
+      storage.addPerson({ id: "person::bob", name: "Bob", role: "owner", isPrimary: true });
+      const bob = storage.listPersons().find((p) => p.id === "person::bob")!;
+      expect(bob.role).toBe("owner");
+      expect(bob.isPrimary).toBe(true);
+
+      const version = storage.runQuery("SELECT value FROM metadata WHERE key = 'schema_version';")[0].value;
+      expect(version).toBe("3");
+      storage.close();
+    } finally {
+      cleanupTempWorkspace(dir);
     }
   });
 });
