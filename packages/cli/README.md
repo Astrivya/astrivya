@@ -59,6 +59,18 @@ sync, premium plugins, credits) are **server-authoritative**:
 - Updates are checked at most once per day and shown once per version. Opt out
   with `--no-update-check`, `NO_UPDATE_NOTIFIER`, `CI`, or `astrivya update disable`.
 
+## Telemetry
+
+The CLI sends **anonymous, opt-out** usage stats (command name, duration, exit
+status, OS, CLI version, and a random install id) to PostHog so we can improve
+the product. **No code, paths, arguments, queries, tokens, or any other
+sensitive data is ever collected.**
+
+- You'll see a one-time notice on your first run.
+- Disable with `astrivya config set telemetry off` (persisted), or
+  `ASTRIVYA_TELEMETRY=off` / `NO_TELEMETRY=1` for a single run/session.
+- Telemetry is automatically disabled in CI environments.
+
 ## License
 
 Apache 2.0 (`packages/cli`). This package is the open client for Astrivya's

@@ -17,19 +17,23 @@ import {
 import envPaths from "env-paths";
 import { getByokProvider, getConfig } from "./api";
 import { handleReadResource, handleToolCall, refreshContextDigest, setAkgStorage, setToolPlugins } from "./handlers";
-import { checkForUpdates, formatBanner, isOptedOut } from "./lib/update-notifier";
+import { maybeAutoUpdate } from "./lib/auto-update";
 import { CURRENT_VERSION } from "./lib/version";
 import { loadToolPlugins } from "./plugin";
 import { RESOURCE_DEFINITIONS, buildToolList } from "./schemas";
 import {
+  ensureSession,
   getStatus,
   initStatus,
+  readJournal,
   recordEvent,
   recordServerStop,
   recordSessionEnd,
   recordSessionStart,
   recordToolCall,
+  touchSession,
 } from "./status";
+import { maybePrintTelemetryBanner } from "./telemetry";
 
 function createServer() {
   const server = new Server(
@@ -43,8 +47,9 @@ function createServer() {
     return { tools: buildToolList(pluginTools) };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args } = request.params;
+    const startedAt = Date.now();
     let ok = false;
     try {
       const result = await handleToolCall(name, args);
@@ -57,7 +62,10 @@ function createServer() {
         isError: true,
       };
     } finally {
-      recordToolCall(name, ok);
+      recordToolCall(name, ok, {
+        sessionId: extra?.sessionId || `stdio:${process.pid}`,
+        durationMs: Date.now() - startedAt,
+      });
     }
   });
 
@@ -148,7 +156,14 @@ async function maybeAutoIndex(storage: AkgStorage, workspacePath: string): Promi
         const embedder = new AkgEmbedder();
         const modelsDir = path.join(envPaths("astrivya", { suffix: "" }).config, "models");
         const emb = await embedder.embedAllChunks(storage, modelsDir, (done, total) => {
-          if (done % 50 === 0 || done === total) console.error(`[Astrivya MCP] Embedding chunks ${done}/${total}...`);
+          const step = Math.max(1, Math.round(total / 20)); // ~5% steps
+          if (done < total && done % step !== 0) return;
+          const pct = Math.round((done / total) * 100);
+          const filled = Math.round((done / total) * 20);
+          const bar = "\u2588".repeat(filled) + "\u2591".repeat(Math.max(0, 20 - filled));
+          // In-place single-line update (stderr): rewrite the same line.
+          process.stderr.write(`\r[Astrivya MCP] Embedding chunks... [${bar}] ${pct}% (${done}/${total})`);
+          if (done === total) process.stderr.write("\n");
         });
         console.error(`[Astrivya MCP] Embedded ${emb.embedded}/${emb.total} chunks.`);
       } catch (err: unknown) {
@@ -203,16 +218,12 @@ async function initAkg(): Promise<string> {
   return workspacePath;
 }
 
-// Non-blocking: checks the npm registry once per day and prints a one-line
-// banner to stderr (stdout is reserved for the MCP stdio protocol channel).
-// Never crashes the server.
+// Non-blocking: with ASTRIVYA_MCP_AUTO_UPDATE=1 newer same-major versions are
+// installed in the background (takes effect on the next client launch);
+// otherwise a one-line update banner is printed to stderr (stdout is reserved
+// for the MCP stdio protocol channel). Never crashes the server.
 function maybePrintUpdateBanner(): void {
-  if (isOptedOut()) return;
-  void checkForUpdates().then((latest) => {
-    if (latest) {
-      console.error(formatBanner(CURRENT_VERSION, latest));
-    }
-  });
+  void maybeAutoUpdate();
 }
 
 async function runStdioServer() {
@@ -222,13 +233,14 @@ async function runStdioServer() {
   const workspacePath = await initAkg();
   refreshContextDigest();
   maybePrintUpdateBanner();
+  maybePrintTelemetryBanner();
 
   initStatus({ workspace: workspacePath, mode: "stdio", version: CURRENT_VERSION });
 
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  recordSessionStart();
+  recordSessionStart({ client: "stdio" });
   console.error("Astrivya MCP Server is listening on Standard I/O.");
 
   const shutdown = (signal: string) => {
@@ -249,22 +261,39 @@ async function runHttpServer(port: number) {
   const workspacePath = await initAkg();
   refreshContextDigest();
   maybePrintUpdateBanner();
+  maybePrintTelemetryBanner();
 
   initStatus({ workspace: workspacePath, mode: "http", version: CURRENT_VERSION });
 
   const server = createServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
-    onsessioninitialized: () => {
-      recordSessionStart();
-    },
-    onsessionclosed: () => {
-      recordSessionEnd();
-    },
   });
   await server.connect(transport);
 
   const app = http.createServer(async (req, res) => {
+    // CORS for cross-origin clients (Atlas, browser tooling).
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Authorization");
+    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
+
+    // Session lifecycle via the Mcp-Session-Id header: register on the first
+    // (initialize) response, touch on follow-ups, close on DELETE.
+    const sessionHeader = req.headers["mcp-session-id"] as string | undefined;
+    const userAgent = req.headers["user-agent"] as string | undefined;
+    if (sessionHeader) {
+      if (req.method === "DELETE") {
+        recordSessionEnd(sessionHeader);
+      } else {
+        touchSession(sessionHeader);
+      }
+    }
+    res.on("finish", () => {
+      const sid = (res.getHeader("mcp-session-id") as string | undefined) ?? sessionHeader;
+      if (sid && req.method !== "DELETE") ensureSession(sid, userAgent || "http", "http");
+    });
+
     if (req.url === "/health") {
       const status = getStatus();
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -281,6 +310,21 @@ async function runHttpServer(port: number) {
     if (req.url === "/status") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok", ...getStatus() }));
+      return;
+    }
+    if (req.url?.startsWith("/journal")) {
+      const parsed = new URL(req.url, `http://localhost:${port}`);
+      const limit = Math.min(2000, Math.max(1, Number.parseInt(parsed.searchParams.get("limit") || "200", 10) || 200));
+      const status = getStatus();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          status: "ok",
+          journal: status.journal,
+          journalRotated: status.journalRotated,
+          events: readJournal(workspacePath, limit),
+        }),
+      );
       return;
     }
     try {

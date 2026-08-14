@@ -86,7 +86,8 @@ export function registerSync(program: Command): void {
       apiKey = apiKey.trim();
       if (!apiKey) {
         error("API key is required.");
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       saveConfig({ syncApiKey: apiKey });
       success("Team sync initialized.");
@@ -101,7 +102,8 @@ export function registerSync(program: Command): void {
       const apiKey = (config as any).syncApiKey;
       if (!apiKey) {
         error("No sync API key found. Run `astrivya sync init` first.");
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const relayUrl = process.env.ASTRIVYA_SYNC_URL || getBaseUrl().replace(/\/+$/, "");
@@ -128,20 +130,23 @@ export function registerSync(program: Command): void {
 
         if (res.status === 402) {
           error("Sync requires an active subscription.");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         if (!res.ok) {
           const err = await res.text();
           error(`Push failed: ${err}`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         const result: any = await res.json();
         success(`Pushed ${result.accepted} items to team relay.`);
       } catch (err: unknown) {
         error(`Push failed: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -153,7 +158,8 @@ export function registerSync(program: Command): void {
       const apiKey = (config as any).syncApiKey;
       if (!apiKey) {
         error("No sync API key found. Run `astrivya sync init` first.");
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const relayUrl = process.env.ASTRIVYA_SYNC_URL || getBaseUrl().replace(/\/+$/, "");
@@ -170,13 +176,15 @@ export function registerSync(program: Command): void {
 
         if (res.status === 402) {
           error("Sync requires an active subscription.");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         if (!res.ok) {
           const err = await res.text();
           error(`Pull failed: ${err}`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         const remoteData: any = await res.json();
@@ -192,7 +200,8 @@ export function registerSync(program: Command): void {
         );
       } catch (err: unknown) {
         error(`Pull failed: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -245,7 +254,8 @@ export function registerSync(program: Command): void {
       const authToken = (config as any).token || process.env.ASTRIVYA_TOKEN;
       if (!authToken) {
         error("Not authenticated. Run `astrivya auth login` first.");
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       // The config schema uses camelCase (teamId/orgId); the old snake_case
@@ -254,7 +264,8 @@ export function registerSync(program: Command): void {
       const teamId = options.team || config.teamId || config.orgId || (config as any).team_id;
       if (!teamId) {
         error("Team ID required. Provide --team or join/create a team first (`astrivya team create|join`).");
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const baseUrl = getBaseUrl();
@@ -270,13 +281,15 @@ export function registerSync(program: Command): void {
 
         if (res.status === 402) {
           error("Sync requires an active subscription.");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         if (!res.ok) {
           const err = await res.text();
           error(`Failed to create API key: ${err}`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         const data: any = await res.json();
@@ -284,7 +297,8 @@ export function registerSync(program: Command): void {
         success(`API key created and saved: ${data.apiKey.slice(0, 12)}...`);
       } catch (err: unknown) {
         error(`Failed to create API key: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -370,7 +384,8 @@ export function registerSync(program: Command): void {
           console.log(`\nDone. ${imported}/${toImport.length} imported.\n`);
         } catch (err: unknown) {
           console.error(`Sync failed for ${provider}:`, getErrorMessage(err));
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
       });
   }

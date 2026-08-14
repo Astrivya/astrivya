@@ -32,6 +32,9 @@ export interface AppConfig {
   teamMcpId?: string;
   role?: string;
   teamName?: string;
+  autoUpdate?: "on" | "prompt" | "off";
+  /** Anonymous usage telemetry (opt-out; see src/lib/telemetry.ts). */
+  telemetry?: "on" | "off";
 }
 
 let _configCache: AppConfig | null = null;
@@ -133,11 +136,23 @@ export async function apiCall(
   }
 
   if (!res.ok) {
-    const errText = await res.text();
+    const errText = sanitizeApiErrorBody(await res.text());
     throw new ApiError(`API call failed with status ${res.status}: ${errText}`, res.status);
   }
 
   return await res.json();
+}
+
+/**
+ * Strip raw HTML bodies out of API error messages. A Next.js page (or any
+ * HTML 404 page) dumped into an error string is noise — and a sign the
+ * request hit the wrong host.
+ */
+export function sanitizeApiErrorBody(text: string): string {
+  if (/^\s*<(?:!doctype|html)/i.test(text)) {
+    return "expected a JSON API response but received HTML (check the API base URL)";
+  }
+  return text.slice(0, 500);
 }
 
 export function clearConfigCache(): void {
@@ -206,7 +221,7 @@ export function registerWithProgram<T>(
         await fn(...args);
       } catch (err: unknown) {
         console.error(`${color.red("Error:")} ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
       }
     });
 }

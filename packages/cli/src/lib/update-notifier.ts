@@ -13,6 +13,7 @@ export interface UpdateCache {
   lastChecked?: number;
   notifiedVersion?: string;
   disabled?: boolean;
+  lastFailedAt?: number;
 }
 
 const paths = envPaths("astrivya", { suffix: "" });

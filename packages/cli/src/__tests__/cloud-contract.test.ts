@@ -61,9 +61,10 @@ describe("cloud contract — published clients ↔ api.astrivya.ai", () => {
 
     const unknown = paths
       .filter((p) => !manifest.has(p) && !manifest.has(p.replace("${provider}", "{provider}")))
-      // /api/akg/* (except the sync ones in the manifest) is the CLI's LOCAL
-      // atlas HTTP server, not the cloud — out of scope for this contract.
-      .filter((p) => !p.startsWith("/api/akg/") || manifest.has(p));
+      // /api/akg/* and /api/mcp/* are the CLI's LOCAL HTTP endpoints (atlas
+      // graph server + MCP session-status proxy), not the cloud — out of
+      // scope for this contract.
+      .filter((p) => (!p.startsWith("/api/akg/") && !p.startsWith("/api/mcp/")) || manifest.has(p));
 
     expect(unknown, `client paths missing from cloud-contract.json:\n${unknown.join("\n")}`).toEqual([]);
   });

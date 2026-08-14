@@ -38,7 +38,8 @@ export function registerPlugins(program: Command): void {
         console.log();
       } catch (err) {
         console.error(`Failed to list plugins: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -50,7 +51,8 @@ export function registerPlugins(program: Command): void {
         const token = getPremiumAuth();
         if (!token) {
           console.log("\n  Not authenticated. Run: astrivya auth login\n");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         const pm = new PluginManager(undefined, getBaseUrl());
         console.log("  Synchronizing plugins...");
@@ -74,7 +76,8 @@ export function registerPlugins(program: Command): void {
         console.log();
       } catch (err) {
         console.error(`Plugin sync failed: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -101,7 +104,8 @@ export function registerPlugins(program: Command): void {
         );
       } catch (err) {
         console.error(`Plugin verification failed: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -113,7 +117,8 @@ export function registerPlugins(program: Command): void {
         const token = getPremiumAuth();
         if (!token) {
           console.log("\n  Not authenticated. Run: astrivya auth login\n");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         const pm = new PluginManager(undefined, getBaseUrl());
         if (pluginId) {
@@ -132,7 +137,8 @@ export function registerPlugins(program: Command): void {
         }
       } catch (err) {
         console.error(`Update failed: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -146,7 +152,8 @@ export function registerPlugins(program: Command): void {
         console.log("  \u2713 All plugins removed.\n");
       } catch (err) {
         console.error(`Failed to clear plugins: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 }

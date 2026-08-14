@@ -91,8 +91,9 @@ export class AkgQuery {
     const ftsResults = this.ftsSearch(query, limit);
     const semanticResults = await this.semanticSearch(query, limit);
     const graphResults = this.graphSearch(query, limit);
+    const fileResults = this.fileTargetSearch(query, limit);
 
-    return this.fuseResults(ftsResults, semanticResults, graphResults, intent, limit);
+    return this.fuseResults(ftsResults, semanticResults, graphResults, fileResults, intent, limit);
   }
 
   classifyQuery(query: string): QueryIntent {
@@ -100,16 +101,16 @@ export class AkgQuery {
 
     // Architecture / flow queries → weight graph higher
     if (/trace|flow|impact|depends|breaks|removes?|calls?|imports?|architecture|relationship/.test(lower)) {
-      return { ftsWeight: 0.2, semanticWeight: 0.2, graphWeight: 0.6 };
+      return { ftsWeight: 0.2, semanticWeight: 0.2, graphWeight: 0.6, fileWeight: 0.0 };
     }
 
-    // Specific symbol lookups → weight FTS higher
+    // Specific symbol/file lookups → weight FTS + filename matching higher
     if (/where is|find|locate|file|function|class|interface|code/.test(lower)) {
-      return { ftsWeight: 0.6, semanticWeight: 0.2, graphWeight: 0.2 };
+      return { ftsWeight: 0.4, semanticWeight: 0.15, graphWeight: 0.15, fileWeight: 0.5 };
     }
 
     // Conceptual / general questions → weight semantic/FTS higher
-    return { ftsWeight: 0.4, semanticWeight: 0.4, graphWeight: 0.2 };
+    return { ftsWeight: 0.35, semanticWeight: 0.35, graphWeight: 0.15, fileWeight: 0.15 };
   }
 
   private ftsSearch(query: string, limit: number): RetrievalResult[] {
@@ -275,10 +276,105 @@ export class AkgQuery {
     return results.sort((a, b) => b.score - a.score).slice(0, limit);
   }
 
+  /**
+   * File-name targeting pass: when the query names (or stems) a file, surface
+   * chunks from that file even if its content does not lexically match the
+   * question. Matches against the file path basename with light stemming
+   * ("optimization" → "optimize", "competitors" → "competitor").
+   */
+  private fileTargetSearch(query: string, limit: number): RetrievalResult[] {
+    const tokens = query
+      .toLowerCase()
+      .split(/[^a-zA-Z0-9_\-]+/)
+      .filter((t) => t.length > 2);
+
+    if (tokens.length === 0) return [];
+
+    const stem = (t: string): string =>
+      t
+        .replace(/izations?$/, "")
+        .replace(/ation$/, "")
+        .replace(/ings?$/, "")
+        .replace(/ed$/, "")
+        .replace(/es$/, "")
+        .replace(/s$/, "");
+
+    const stemMatch = (a: string, b: string): boolean => {
+      if (a === b) return true;
+      const sa = stem(a);
+      const sb = stem(b);
+      if (sa === sb) return true;
+      let i = 0;
+      while (i < sa.length && i < sb.length && sa[i] === sb[i]) i++;
+      return i >= 5; // shared root of 5+ chars ("optimiza" ≈ "optimize")
+    };
+
+    let paths: any[] = [];
+    try {
+      paths = this.storage.runQuery("SELECT DISTINCT file_path FROM chunks;");
+    } catch {
+      return [];
+    }
+
+    const byFile = new Map<string, number>();
+    for (const row of paths) {
+      const filePath = row.file_path as string;
+      const basename = filePath.toLowerCase().split(/[\\/]/).pop() ?? "";
+      const baseNameNoExt = basename.replace(/\.[^.]+$/, "");
+      const fileTokens = new Set([basename, baseNameNoExt, ...baseNameNoExt.split(/[._-]+/)]);
+
+      let best = 0;
+      for (const tok of tokens) {
+        const exact = fileTokens.has(tok);
+        const stemHit = [...fileTokens].some((ft) => stemMatch(ft, tok));
+        const partial = tok.length >= 4 && (baseNameNoExt.includes(tok) || tok.includes(baseNameNoExt));
+        if (exact) best = Math.max(best, 1.0);
+        else if (stemHit) best = Math.max(best, 0.85);
+        else if (partial) best = Math.max(best, 0.6);
+      }
+      if (best > 0) {
+        const depth = filePath.split("/").length;
+        byFile.set(filePath, best / (1 + Math.log(depth)));
+      }
+    }
+
+    if (byFile.size === 0) return [];
+
+    const topFiles = [...byFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+    const results: RetrievalResult[] = [];
+    for (const [filePath, score] of topFiles) {
+      try {
+        const rows = this.storage.runQuery(
+          "SELECT id, node_id, start_line, end_line, content, created_at, updated_at FROM chunks WHERE file_path = ? ORDER BY start_line LIMIT 3;",
+          [filePath],
+        );
+        for (const row of rows) {
+          const r: RetrievalResult = {
+            chunkId: row.id,
+            nodeId: row.node_id ?? undefined,
+            filePath,
+            startLine: row.start_line ?? undefined,
+            endLine: row.end_line ?? undefined,
+            content: row.content,
+            score,
+            source: "file",
+          };
+          this.enrichFreshness(r, row.created_at, row.updated_at);
+          results.push(r);
+          break; // one representative chunk per file keeps fusion keys unique
+        }
+      } catch {
+        // ignore per-file read errors
+      }
+    }
+    return results;
+  }
+
   private fuseResults(
     fts: RetrievalResult[],
     semantic: RetrievalResult[],
     graph: RetrievalResult[],
+    file: RetrievalResult[],
     weights: QueryIntent,
     limit: number,
   ): RetrievalResult[] {
@@ -311,6 +407,7 @@ export class AkgQuery {
     merge(fts, weights.ftsWeight);
     merge(semantic, weights.semanticWeight);
     merge(graph, weights.graphWeight);
+    merge(file, weights.fileWeight);
 
     return Array.from(fusedMap.values())
       .sort((a, b) => b.score - a.score)

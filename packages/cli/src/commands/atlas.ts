@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
 import { AkgStorage, GraphTraversal, ImpactAnalyzer } from "@astrivya/akg-core";
-import { AkgIndexer } from "@astrivya/akg-indexer";
+import { AkgIndexer, Watcher } from "@astrivya/akg-indexer";
 import type { Command } from "commander";
 import { color, error, getErrorMessage, info } from "../lib/output";
 
@@ -23,7 +23,8 @@ export function registerAtlas(program: Command): void {
         await storage.init(workspacePath);
       } catch (err: unknown) {
         error(`Failed to initialize AKG storage: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const staticDir = path.join(__dirname, "atlas");
@@ -65,6 +66,41 @@ export function registerAtlas(program: Command): void {
         }
 
         // API Endpoints
+        if (pathname === "/api/mcp/status" || pathname === "/api/mcp/journal") {
+          const mcpBase = (process.env.ASTRIVYA_MCP_URL || "http://localhost:3001").replace(/\/+$/, "");
+          const upstream = pathname === "/api/mcp/status" ? "/status" : `/journal${url.search || ""}`;
+          void (async () => {
+            try {
+              const upstreamRes = await fetch(`${mcpBase}${upstream}`, {
+                headers: { Accept: "application/json" },
+                signal: AbortSignal.timeout(2500),
+              });
+              if (!upstreamRes.ok) {
+                res.writeHead(502, { "Content-Type": "application/json" });
+                res.end(
+                  JSON.stringify({
+                    error: `MCP server unreachable at ${mcpBase} (HTTP ${upstreamRes.status})`,
+                    hint: "Start it with: astrivya mcp-server --http --port 3001",
+                  }),
+                );
+                return;
+              }
+              const body = await upstreamRes.text();
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(body);
+            } catch {
+              res.writeHead(502, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({
+                  error: `MCP server unreachable at ${mcpBase}`,
+                  hint: "Start it with: astrivya mcp-server --http --port 3001",
+                }),
+              );
+            }
+          })();
+          return;
+        }
+
         if (pathname.startsWith("/api/akg/")) {
           res.setHeader("Content-Type", "application/json");
 
@@ -256,6 +292,67 @@ export function registerAtlas(program: Command): void {
               return;
             }
 
+            if (pathname === "/api/akg/embedmap") {
+              // PCA 2D projection of chunk embeddings — the "semantic
+              // terrain" of the workspace. Points carry their file, node id,
+              // community and a content preview for hover inspection.
+              const rows = storage.runQuery(
+                `SELECT e.chunk_id, e.vector, c.file_path, c.content, c.node_id, n.community
+                 FROM embeddings e
+                 JOIN chunks c ON c.id = e.chunk_id
+                 LEFT JOIN nodes n ON n.id = c.node_id
+                 ORDER BY c.id
+                 LIMIT 4000;`,
+              );
+              const vectors: number[][] = [];
+              const meta: any[] = [];
+              for (const r of rows || []) {
+                if (!r.vector) continue;
+                const raw = r.vector instanceof Uint8Array ? r.vector : new Uint8Array(r.vector);
+                const floats = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
+                vectors.push(Array.from(floats));
+                meta.push({
+                  chunkId: r.chunk_id,
+                  file: r.file_path,
+                  nodeId: r.node_id,
+                  community: r.community ?? null,
+                  preview: String(r.content || "").slice(0, 140),
+                });
+              }
+              if (vectors.length < 3) {
+                res.writeHead(200);
+                res.end(
+                  JSON.stringify({
+                    points: [],
+                    count: 0,
+                    note: "Not enough embeddings yet — run `astrivya akg init` with embeddings.",
+                  }),
+                );
+                return;
+              }
+              const projected = pca2(vectors);
+              let minX = Number.POSITIVE_INFINITY;
+              let maxX = Number.NEGATIVE_INFINITY;
+              let minY = Number.POSITIVE_INFINITY;
+              let maxY = Number.NEGATIVE_INFINITY;
+              for (const [x, y] of projected) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+              }
+              const rx = maxX - minX || 1;
+              const ry = maxY - minY || 1;
+              const points = projected.map(([x, y], i) => ({
+                x: (x - minX) / rx,
+                y: (y - minY) / ry,
+                ...meta[i],
+              }));
+              res.writeHead(200);
+              res.end(JSON.stringify({ points, count: points.length }));
+              return;
+            }
+
             res.writeHead(404);
             res.end(JSON.stringify({ error: "Endpoint not found" }));
             return;
@@ -305,70 +402,30 @@ export function registerAtlas(program: Command): void {
         info(`\n🚀 ${color.bold("Astrivya Atlas serving active at:")} ${color.cyan(url)}`);
         info(`   Database workspace: ${color.dim(workspacePath)}\n`);
 
-        // Start file watcher
-        let debounceTimer: NodeJS.Timeout | null = null;
-        const pendingChanges = new Set<string>();
-        const ignoredExtensions = new Set([".json", ".lock", ".db", ".log", ".tmp"]);
-
-        try {
-          fs.watch(workspacePath, { recursive: true }, (_event, filename) => {
-            if (!filename) return;
-
-            const parts = filename.replace(/\\/g, "/").split("/");
-            if (
-              parts.some(
-                (p) =>
-                  p.startsWith(".") ||
-                  p === "node_modules" ||
-                  p === "dist" ||
-                  p === "out" ||
-                  p === "coverage" ||
-                  p === "graphify-out" ||
-                  p === ".astrivya",
-              )
-            ) {
-              return;
-            }
-
-            const ext = path.extname(filename).toLowerCase();
-            if (ignoredExtensions.has(ext)) return;
-
-            const fullPath = path.join(workspacePath, filename);
-
-            // Check if file still exists on disk
-            if (!fs.existsSync(fullPath)) return;
-            try {
-              if (!fs.statSync(fullPath).isFile()) return;
-            } catch {
-              return;
-            }
-
-            pendingChanges.add(fullPath);
-
-            if (debounceTimer) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(async () => {
-              const changes = Array.from(pendingChanges);
-              pendingChanges.clear();
-
-              const indexer = new AkgIndexer(storage, workspacePath);
-
-              for (const file of changes) {
-                try {
-                  const wasUpdated = await indexer.indexFile(file);
-                  if (wasUpdated) {
-                    const rel = path.relative(workspacePath, file).replace(/\\/g, "/");
-                    const updateMsg = `data: ${JSON.stringify({ type: "update", file: rel })}\n\n`;
-                    activeClients.forEach((client) => client.write(updateMsg));
-                  }
-                } catch (_err: unknown) {
-                  // silent warning for busy files
+        // Start file watcher (shared Watcher: debounced, noise-filtered).
+        // Changes are indexed incrementally and pushed to SSE clients.
+        const indexer = new AkgIndexer(storage, workspacePath);
+        const watcher = new Watcher(
+          async (files) => {
+            for (const file of files) {
+              try {
+                const wasUpdated = await indexer.indexFile(file);
+                if (wasUpdated) {
+                  const rel = path.relative(workspacePath, file).replace(/\\/g, "/");
+                  const updateMsg = `data: ${JSON.stringify({ type: "update", file: rel })}\n\n`;
+                  activeClients.forEach((client) => client.write(updateMsg));
                 }
+              } catch {
+                // silent warning for busy files
               }
-            }, 600);
-          });
-        } catch (err: unknown) {
-          info(`File watcher failed to start: ${getErrorMessage(err)}`);
+            }
+          },
+          { onError: (err) => info(`File watcher error: ${getErrorMessage(err)}`) },
+        );
+        if (!watcher.start(workspacePath)) {
+          info("File watcher failed to start — graph updates are manual (`astrivya akg reindex`).");
         }
+        process.once("SIGINT", () => watcher.stop());
 
         // Auto-open browser
         const cmd =
@@ -385,6 +442,60 @@ export function registerAtlas(program: Command): void {
         });
       });
     });
+}
+
+// PCA projection of high-dim vectors to 2D via power iteration on the
+// covariance operator (X^T X v). Avoids materializing the d×d covariance
+// matrix, so it is fine for a few thousand 384-dim vectors.
+export function pca2(vectors: number[][]): number[][] {
+  const n = vectors.length;
+  const d = vectors[0].length;
+  const mean = new Array(d).fill(0);
+  for (const v of vectors) for (let i = 0; i < d; i++) mean[i] += v[i] / n;
+  const centered = vectors.map((v) => v.map((x, i) => x - mean[i]));
+
+  const normalize = (v: number[]): number[] => {
+    let norm = 0;
+    for (const x of v) norm += x * x;
+    norm = Math.sqrt(norm);
+    if (!Number.isFinite(norm) || norm === 0) return new Array(v.length).fill(0);
+    return v.map((x) => x / norm);
+  };
+
+  const powerIteration = (rows: number[][], seed: number[]): number[] => {
+    let pc = seed;
+    for (let it = 0; it < 25; it++) {
+      const out = new Array(d).fill(0);
+      for (const row of rows) {
+        let dot = 0;
+        for (let i = 0; i < d; i++) dot += row[i] * pc[i];
+        for (let i = 0; i < d; i++) out[i] += row[i] * dot;
+      }
+      pc = normalize(out);
+    }
+    return pc;
+  };
+
+  const pc1 = powerIteration(centered, new Array(d).fill(1));
+  const project = (row: number[], pc: number[]): number => {
+    let dot = 0;
+    for (let i = 0; i < d; i++) dot += row[i] * pc[i];
+    return dot;
+  };
+  const x = centered.map((row) => project(row, pc1));
+
+  // Deflate PC1, then find PC2 on the residual.
+  const residual = centered.map((row) => {
+    const p = project(row, pc1);
+    return row.map((v, i) => v - p * pc1[i]);
+  });
+  const pc2 = powerIteration(
+    residual,
+    Array.from({ length: d }, (_, i) => (i % 2 === 0 ? 1 : -1)),
+  );
+  const y = residual.map((row) => project(row, pc2));
+
+  return x.map((xi, i) => [xi, y[i]]);
 }
 
 // Custom community labeling logic based on folder prefixes and keyword analysis

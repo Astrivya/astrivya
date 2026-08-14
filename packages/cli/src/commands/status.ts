@@ -224,7 +224,9 @@ export function registerStatus(program: Command): void {
         // MCP Server
         subheader("MCP Server");
         if (mcpSummary.hasJournal) {
-          console.log(`  Sessions:     ${color.bold(String(mcpSummary.sessions))}`);
+          console.log(
+            `  Sessions:     ${color.bold(`${mcpSummary.activeSessions} active / ${mcpSummary.sessions} total`)}`,
+          );
           console.log(
             `  Tool calls:   ${color.bold(String(mcpSummary.toolCalls))}${mcpSummary.toolErrors > 0 ? color.yellow(` (${mcpSummary.toolErrors} errors)`) : ""}`,
           );
@@ -281,7 +283,8 @@ export function registerStatus(program: Command): void {
           spinner.stop();
         }
         console.error(`${color.red("\u2717")} Status failed:`, getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 }

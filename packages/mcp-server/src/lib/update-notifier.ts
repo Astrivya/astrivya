@@ -11,6 +11,7 @@ const FETCH_TIMEOUT_MS = 2500;
 export interface UpdateCache {
   lastChecked?: number;
   notifiedVersion?: string;
+  lastFailedAt?: number;
 }
 
 const paths = envPaths("astrivya-mcp", { suffix: "" });

@@ -218,11 +218,13 @@ export function registerSetup(program: Command): void {
 
         if (provider && !apiKey) {
           error("--api-key is required when using --provider");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         if (apiKey && !provider) {
           error("--provider is required when using --api-key");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         // Interactive mode when no flags provided or --interactive is set
@@ -266,7 +268,8 @@ export function registerSetup(program: Command): void {
 
         if (!token && !options.detect) {
           error("No token found. Run `astrivya auth login` first, pass --token, or use --detect for local-only setup.");
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         // Save config
@@ -426,7 +429,8 @@ export function registerSetup(program: Command): void {
         }
       } catch (err: unknown) {
         error(`Setup failed: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 }

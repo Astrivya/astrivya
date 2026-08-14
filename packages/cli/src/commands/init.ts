@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { AkgStorage } from "@astrivya/akg-core";
-import { AkgEmbedder, AkgIndexer } from "@astrivya/akg-indexer";
+import { AkgEmbedder, AkgIndexer, buildIdentityGraph } from "@astrivya/akg-indexer";
 import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import envPaths from "env-paths";
@@ -35,6 +35,16 @@ async function runIndex(workspacePath: string, withEmbed: boolean): Promise<bool
     const result = await indexer.indexWorkspaceDetailed((ev) => renderer.update(ev), {
       parallel: true,
     });
+
+    const identity = buildIdentityGraph(storage, workspacePath);
+    storage.saveToDisk(); // flush: indexer left a debounced (unref'd) auto-save timer
+    if (identity.repos > 0 || identity.persons > 0) {
+      console.log(
+        color.dim(
+          `  Identity: ${identity.repos} repo(s), ${identity.persons} person(s), ${identity.personEdges + identity.repoEdges} relation(s)`,
+        ),
+      );
+    }
 
     let embResult: { embedded: number; total: number } | null = null;
     if (withEmbed) {
@@ -178,7 +188,8 @@ export function registerInit(program: Command): void {
 `);
       } catch (err: unknown) {
         console.error("Setup wizard failed:", getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 }

@@ -17,6 +17,7 @@ export default defineConfig({
   bundle: true,
   treeshake: true,
   sourcemap: "external",
+  noExternal: ["@astrivya/akg-core", "@astrivya/akg-indexer", "@astrivya/plugin-runtime", "@astrivya/plugin-api"],
   define: {
     "process.env.__PACKAGE_VERSION__": JSON.stringify(version),
   },

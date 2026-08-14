@@ -433,17 +433,14 @@ async function main() {
   const home14 = makeWorkspace();
   const env14 = isolatedEnv({ home: home14 });
   const creds = run(["credits"], { cwd: ws14, env: env14 });
-  assert(creds.status === 0 && creds.stdout.includes("Not logged in"), "`credits` without auth says not logged in");
+  assert(creds.status !== 0 && /not logged in/i.test(creds.stdout), "`credits` without auth says not logged in");
   const credsJson = run(["credits", "--json"], { cwd: ws14, env: env14 });
   assert(
-    credsJson.status === 0 && credsJson.stdout.includes("Not logged in"),
+    credsJson.status !== 0 && /not logged in/i.test(credsJson.stdout),
     "`credits --json` without auth says not logged in",
   );
   const hist = run(["credits", "history"], { cwd: ws14, env: env14 });
-  assert(
-    hist.status === 0 && hist.stdout.includes("Not logged in"),
-    "`credits history` without auth says not logged in",
-  );
+  assert(hist.status !== 0 && /not logged in/i.test(hist.stdout), "`credits history` without auth says not logged in");
   run(["config", "set", "offlineMode", "true"], { cwd: ws14, env: env14 });
   const offline = run(["credits"], { cwd: ws14, env: env14 });
   assert(offline.stdout.includes("only available in online mode"), "`credits` respects offline mode");

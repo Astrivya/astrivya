@@ -471,7 +471,6 @@ class TtyIndexRenderer implements IndexRenderer {
 
 class LineIndexRenderer implements IndexRenderer {
   private lastUnit: string | null = null;
-  private lastEmbed = 0;
   private lastEtaReport = 0;
   private filesDone = 0;
   private filesTotal: number | undefined;
@@ -507,10 +506,14 @@ class LineIndexRenderer implements IndexRenderer {
 
   embed(done: number, total: number): void {
     if (total === 0) return;
-    const now = Date.now();
-    if (now - this.lastEmbed < 300 && done < total) return;
-    this.lastEmbed = now;
-    console.log(`  Embedding chunks... ${fmt(done)}/${fmt(total)} (${Math.round((done / total) * 100)}%)`);
+    const step = Math.max(1, Math.round(total / 20)); // ~5% steps
+    if (done < total && done % step !== 0) return;
+    const pct = Math.round((done / total) * 100);
+    const filled = Math.round((done / total) * 20);
+    const bar = "\u2588".repeat(filled) + "\u2591".repeat(Math.max(0, 20 - filled));
+    // In-place single-line update: rewrite the same line (auto-updating bar + values).
+    process.stdout.write(`\r  Embedding chunks... [${bar}] ${pct}% (${fmt(done)}/${fmt(total)})`);
+    if (done === total) process.stdout.write("\n");
   }
 
   embedSkipped(reason: string): void {

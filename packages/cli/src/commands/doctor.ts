@@ -196,7 +196,8 @@ export function registerDoctor(program: Command): void {
         }
         console.log(`  \u2717 ${result.error || "MCP server self-test failed"}`);
         console.log(`  Run ${color.cyan("`astrivya mcp-server`")} manually to see server output.\n`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const sections: Array<{ title: string; checks: Check[] }> = [];

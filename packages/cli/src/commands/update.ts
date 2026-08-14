@@ -1,33 +1,14 @@
-import { execSync } from "node:child_process";
 import type { Command } from "commander";
-import { color, error, getErrorMessage, info, success, warn } from "../lib/output";
-import { startSpinner } from "../lib/output";
+import { runInstall } from "../lib/auto-update";
+import { color, info, success, warn } from "../lib/output";
 import {
   buildInstallCommand,
-  clearNotifiedVersion,
   detectInstallManager,
   fetchLatestVersion,
   semverCompare,
   setDisabled,
 } from "../lib/update-notifier";
 import { CURRENT_VERSION } from "../lib/version";
-
-const NPM_PACKAGE = "@astrivya/cli";
-
-function runInstall(cmd: string): void {
-  const spinner = startSpinner("Installing the latest astrivya\u2026");
-  try {
-    execSync(cmd, { stdio: "pipe", encoding: "utf8", timeout: 180_000 });
-    spinner.succeed();
-    clearNotifiedVersion();
-    success("Updated to the latest version.");
-  } catch (err: unknown) {
-    spinner.fail();
-    error(`Update failed: ${getErrorMessage(err)}`);
-    info(`You can also run it manually: ${cmd}`);
-    process.exit(1);
-  }
-}
 
 export function registerUpdate(program: Command): void {
   const update = program.command("update").description("Check for and install the latest version of astrivya");
@@ -43,8 +24,11 @@ export function registerUpdate(program: Command): void {
       return;
     }
     const manager = detectInstallManager();
-    info(`Update available: ${CURRENT_VERSION} ${color.dim("→")} ${color.bold(latest)} (via ${manager}).`);
-    runInstall(buildInstallCommand(manager));
+    info(`Update available: ${CURRENT_VERSION} ${color.dim("\u2192")} ${color.bold(latest)} (via ${manager}).`);
+    if (!runInstall(buildInstallCommand(manager))) {
+      process.exitCode = 1;
+      return;
+    }
   });
 
   update
@@ -83,7 +67,10 @@ export function registerUpdate(program: Command): void {
           return;
         }
       }
-      runInstall(buildInstallCommand(detectInstallManager()));
+      if (!runInstall(buildInstallCommand(detectInstallManager()))) {
+        process.exitCode = 1;
+        return;
+      }
     });
 
   update

@@ -7,6 +7,8 @@ export { TodoParser } from "./todo-parser";
 export { AkgEmbedder } from "./embedder";
 export { AkgIndexer } from "./indexer";
 export type { IndexWorkspaceOptions } from "./indexer";
+export { Watcher } from "./watcher";
+export type { WatcherOptions } from "./watcher";
 export {
   computeMaxWorkers,
   computeMemoryCap,
@@ -22,6 +24,8 @@ export {
   summarizeUnits,
   WORKSPACE_MARKER_FILES,
 } from "./workspace-map";
+export { buildIdentityGraph } from "./identity";
+export type { IdentityBuildResult, RepoIdentity } from "./identity";
 export type {
   FileIndexResult,
   IndexPhase,

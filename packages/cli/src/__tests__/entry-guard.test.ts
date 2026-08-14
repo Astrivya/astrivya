@@ -56,6 +56,8 @@ describe("runRootAction", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(errorSpy).toHaveBeenCalledWith("TUI error:", expect.stringContaining("boom"));
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
   });
 });

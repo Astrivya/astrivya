@@ -34,7 +34,8 @@ export function registerHooks(program: Command): void {
         success("AKG hooks installed. The knowledge graph will re-index on every commit and merge.");
       } catch (err: unknown) {
         printError(`Failed to install hooks: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -48,7 +49,8 @@ export function registerHooks(program: Command): void {
         success("AKG hooks removed.");
       } catch (err: unknown) {
         printError(`Failed to uninstall hooks: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 

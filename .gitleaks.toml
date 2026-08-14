@@ -1,0 +1,12 @@
+# Gitleaks allowlist for @astrivya/cli and @astrivya/mcp-server
+# The PostHog capture key below is a PUBLIC key by design — it is meant to be
+# embedded in client-side code (like any PostHog JS snippet key). It only
+# allows sending events to the Astrivya PostHog project; it grants no read
+# or management access. The real secret (personal API key) is never
+# committed. See packages/cli/src/lib/telemetry.ts and
+# packages/mcp-server/src/telemetry.ts.
+[allowlist]
+description = "PostHog public capture key (phc_ prefix) embedded for client-side telemetry"
+regexes = [
+  '''phc_BcfHVZzTt4GRwwkMJKgBEnCEuyF8nbDzzQxy6VBJZwfE''',
+]
