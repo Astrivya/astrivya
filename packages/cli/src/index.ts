@@ -83,7 +83,10 @@ Tips:
       const name = thisCommand.name();
       if (opts.updateCheck === false) return;
       if (name === "update" || thisCommand.parent?.name() === "update") return;
-      await maybeAutoUpdate({ skipInstall: name === "mcp-server" });
+      // Session start (bare `astrivya` → TUI) always checks the registry, so
+      // an available update is shown every time the user opens the CLI.
+      const forceCheck = !thisCommand.parent;
+      await maybeAutoUpdate({ skipInstall: name === "mcp-server", forceCheck });
     })
     .hook("postAction", async (thisCommand: Command) => {
       const opts = thisCommand.optsWithGlobals();

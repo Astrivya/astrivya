@@ -184,7 +184,16 @@ export function runInstall(cmd: string, file = CACHE_FILE): boolean {
   } catch (err: unknown) {
     spinner.fail();
     markUpdateFailed(file);
-    error(`Update failed: ${err instanceof Error ? err.message : String(err)}`);
+    // execSync discards the child's output on failure — surface the captured
+    // stderr/stdout tail so failed installs are self-explaining (the npm
+    // debug log alone is not enough to diagnose why an install died).
+    const e = err as { message?: string; stderr?: string; stdout?: string };
+    error(`Update failed: ${e.message ?? String(err)}`);
+    const detail = [e.stderr, e.stdout]
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      .map((s) => s.trim())
+      .join("\n");
+    if (detail) info(`  ${detail.split("\n").slice(-6).join("\n  ")}`);
     info(`You can also run it manually: ${cmd}`);
     return false;
   }
@@ -216,6 +225,8 @@ export async function maybeAutoUpdate(
   opts: {
     noUpdateCheck?: boolean;
     skipInstall?: boolean;
+    /** Skip the once-per-day throttle (session starts — the TUI) */
+    forceCheck?: boolean;
     fetcher?: () => Promise<string | null>;
     installer?: (cmd: string) => boolean;
   } = {},
@@ -224,7 +235,7 @@ export async function maybeAutoUpdate(
   if (opts.noUpdateCheck) return;
   if (isOptedOut()) return;
   const cache = readCache(file);
-  if (!shouldCheck(cache)) return;
+  if (!opts.forceCheck && !shouldCheck(cache)) return;
   const latest = await (opts.fetcher ?? fetchLatestVersion)();
   const result = evaluateUpdate(cache, latest);
   writeCache(cache, file);
@@ -250,6 +261,9 @@ export async function maybeAutoUpdate(
     printBanner();
     return;
   }
+  // Announce the update first so it's visible even if the prompt machinery
+  // misbehaves on some terminal, then offer the one-key install.
+  printBanner();
   const yes = await askYesNo(`Update ${CURRENT_VERSION} \u2192 ${result} now? [y/N] `);
   if (!yes) {
     info("Skipped. Run `astrivya update` anytime.");

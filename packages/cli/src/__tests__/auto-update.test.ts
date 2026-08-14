@@ -37,6 +37,7 @@ import {
   maybeAutoUpdate,
   maybeSyncPlugins,
   readPluginSyncCache,
+  runInstall,
   sameMajor,
   shouldAutoInstall,
   shouldSyncPlugins,
@@ -217,6 +218,24 @@ describe("auto-update — maybeAutoUpdate", () => {
       await maybeAutoUpdate({ fetcher, installer }, file);
       await maybeAutoUpdate({ fetcher, installer }, file);
       expect(fetcher).toHaveBeenCalledTimes(1);
+    } finally {
+      process.argv[1] = prevArgv;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("forceCheck bypasses the 24h throttle (session starts)", async () => {
+    mocks.loadConfig.mockReturnValue({ autoUpdate: "on" });
+    const dir = tempDir();
+    const file = join(dir, "update.json");
+    const installer = vi.fn<(cmd: string) => boolean>(() => true);
+    const fetcher = vi.fn(async () => "0.2.0");
+    const prevArgv = process.argv[1];
+    process.argv[1] = "/usr/lib/node_modules/@astrivya/cli/dist/index.js";
+    try {
+      await maybeAutoUpdate({ fetcher, installer }, file);
+      await maybeAutoUpdate({ fetcher, installer, forceCheck: true }, file);
+      expect(fetcher).toHaveBeenCalledTimes(2);
     } finally {
       process.argv[1] = prevArgv;
       rmSync(dir, { recursive: true, force: true });
@@ -404,6 +423,23 @@ describe("auto-update — forced plugin sync", () => {
     try {
       await maybeSyncPlugins({}, file);
       expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("auto-update — install failure diagnostics", () => {
+  it("surfaces the child's stderr and back-offs on failure", async () => {
+    const dir = tempDir();
+    const file = join(dir, "update.json");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const ok = runInstall("node -e \"console.error('npm ERR! registry 500'); process.exit(1)\"", file);
+      expect(ok).toBe(false);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("npm ERR! registry 500"));
+      expect(readFileSync(file, "utf8")).toContain("lastFailedAt");
     } finally {
       log.mockRestore();
       rmSync(dir, { recursive: true, force: true });

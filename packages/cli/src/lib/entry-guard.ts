@@ -13,7 +13,14 @@ export function runRootAction(program: Command, startTui: () => Promise<void>): 
   if (program.args.length === 0) {
     startTui().catch((err: unknown) => {
       console.error("TUI error:", getErrorMessage(err));
-      process.exit(1);
+      process.exitCode = 1;
+      try {
+        process.stdin.destroy();
+      } catch {}
+      // If a stray listener keeps the event loop alive (e.g. the TUI failed
+      // mid-start in a non-TTY session), force-exit shortly after — by then
+      // any network handles from the update check have long been closed.
+      setTimeout(() => process.exit(1), 2000).unref();
     });
     return;
   }
