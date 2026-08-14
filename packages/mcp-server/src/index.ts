@@ -4,22 +4,32 @@ import * as fs from "node:fs";
 import http from "node:http";
 import * as path from "node:path";
 import { AkgStorage } from "@astrivya/akg-core";
-import { AkgEmbedder, AkgIndexer } from "@astrivya/akg-indexer";
+import { AkgEmbedder, AkgIndexer, Watcher } from "@astrivya/akg-indexer";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import envPaths from "env-paths";
 import { getByokProvider, getConfig } from "./api";
-import { handleReadResource, handleToolCall, refreshContextDigest, setAkgStorage, setToolPlugins } from "./handlers";
+import {
+  getStorage,
+  handleReadResource,
+  handleToolCall,
+  refreshContextDigest,
+  setAkgStorage,
+  setToolPlugins,
+} from "./handlers";
 import { maybeAutoUpdate } from "./lib/auto-update";
 import { CURRENT_VERSION } from "./lib/version";
 import { loadToolPlugins } from "./plugin";
+import { PROMPT_DEFINITIONS, buildPromptPrompt } from "./prompts";
 import { RESOURCE_DEFINITIONS, buildToolList } from "./schemas";
 import {
   ensureSession,
@@ -38,8 +48,24 @@ import { maybePrintTelemetryBanner } from "./telemetry";
 function createServer() {
   const server = new Server(
     { name: "astrivya-mcp-server", version: CURRENT_VERSION },
-    { capabilities: { tools: {}, resources: {} } },
+    { capabilities: { tools: {}, resources: {}, prompts: {} } },
   );
+
+  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+    prompts: PROMPT_DEFINITIONS,
+  }));
+
+  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+    const def = PROMPT_DEFINITIONS.find((p) => p.name === name);
+    if (!def) {
+      throw new Error(`Unknown prompt: ${name}`);
+    }
+    return {
+      description: def.description,
+      messages: [{ role: "user" as const, content: { type: "text" as const, text: buildPromptPrompt(name, args) } }],
+    };
+  });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const pluginTools = await loadToolPlugins();
@@ -254,6 +280,50 @@ async function runStdioServer() {
   process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
+/**
+ * Optional live file watcher for HTTP mode (`ASTRIVYA_WATCH=1`): changed files
+ * are re-indexed incrementally, fresh chunks get embedded, and the context
+ * digest is refreshed — so the graph stays current without manual `akg
+ * reindex`. Best-effort: watcher/indexing errors are logged, never fatal.
+ */
+function startWorkspaceWatcher(storage: AkgStorage, workspacePath: string): Watcher {
+  const indexer = new AkgIndexer(storage, workspacePath);
+  const watcher = new Watcher(
+    async (files) => {
+      let changed = 0;
+      for (const file of files) {
+        try {
+          if (await indexer.indexFile(file)) changed++;
+        } catch {
+          // busy file — retried on the next burst
+        }
+      }
+      if (changed === 0) return;
+      try {
+        const modelsDir = path.join(envPaths("astrivya", { suffix: "" }).config, "models");
+        const embedder = new AkgEmbedder();
+        await embedder.embedAllChunks(storage, modelsDir);
+      } catch {
+        // embeddings are best-effort — keyword search still works
+      }
+      try {
+        refreshContextDigest();
+      } catch {
+        // digest refresh is best-effort
+      }
+      recordEvent("auto_index", { mode: "watch", files: changed }, workspacePath);
+    },
+    {
+      onError: (err) =>
+        console.error(`[Astrivya MCP] File watcher error: ${err instanceof Error ? err.message : String(err)}`),
+    },
+  );
+  if (!watcher.start(workspacePath)) {
+    console.error("[Astrivya MCP] File watcher failed to start (ASTRIVYA_WATCH=1).");
+  }
+  return watcher;
+}
+
 async function runHttpServer(port: number) {
   console.error(`[Astrivya MCP HTTP] Starting up on http://localhost:${port}/mcp`);
   const byok = getByokProvider();
@@ -264,6 +334,9 @@ async function runHttpServer(port: number) {
   maybePrintTelemetryBanner();
 
   initStatus({ workspace: workspacePath, mode: "http", version: CURRENT_VERSION });
+
+  // ASTRIVYA_WATCH=1: keep the graph fresh from file changes while serving.
+  const watcher = process.env.ASTRIVYA_WATCH === "1" ? startWorkspaceWatcher(getStorage(), workspacePath) : null;
 
   const server = createServer();
   const transport = new StreamableHTTPServerTransport({
@@ -344,6 +417,7 @@ async function runHttpServer(port: number) {
 
   const shutdown = (signal: string) => {
     recordServerStop(signal);
+    watcher?.stop();
     app.close(() => {
       void transport
         .close()
