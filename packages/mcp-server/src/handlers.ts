@@ -74,7 +74,7 @@ export function setToolPlugins(plugins: ToolPlugin[]) {
   _toolPlugins = plugins;
 }
 
-function getStorage(): AkgStorage {
+export function getStorage(): AkgStorage {
   if (!storage) throw new Error("AKG storage not initialized. Run `astrivya akg init` first.");
   return storage;
 }
@@ -313,13 +313,15 @@ async function teamDigestBlock(): Promise<Record<string, unknown> | undefined> {
 }
 
 /**
- * Cloud keyword search over the org graph. The cloud search endpoint accepts
- * only a query string (embeddings are not part of its contract), so this
- * never claims vector mode. Returns `{ nodes, mode }`; never throws.
+ * Cloud search over the org graph. The local embedder's query vector is sent
+ * so the cloud can run real vector search when its contract supports it
+ * (`mode: "vector"`); otherwise the cloud falls back to keyword (`mode:
+ * "keyword"`) and the client never claims vector mode. Returns `{ nodes,
+ * mode }`; never throws.
  */
 async function cloudSearchNodes(
   query: string,
-  _embedding: number[] | undefined,
+  embedding: number[] | undefined,
   limit: number,
 ): Promise<{ nodes: any[]; mode: string }> {
   const { syncUrl, token, orgId } = getConfig();
@@ -327,11 +329,44 @@ async function cloudSearchNodes(
   try {
     const body: Record<string, unknown> = { query, limit };
     if (orgId) body.org_id = orgId;
+    if (Array.isArray(embedding) && embedding.length > 0) body.embedding = embedding;
     const cloud = await syncCall(API_PATHS.AKG_SYNC_SEARCH, "POST", body);
     return { nodes: cloud.nodes || [], mode: cloud.mode || "keyword" };
   } catch {
     return { nodes: [], mode: "none" };
   }
+}
+
+/**
+ * Reciprocal-rank fusion of two ranked result lists (local workspace graph +
+ * cloud org graph). Rank-based fusion is robust across heterogeneous sources
+ * with incomparable score scales. Standard k=60 dampens rank gaps.
+ */
+export function reciprocalRankFusion(
+  local: any[],
+  cloud: any[],
+  limit: number,
+): any[] {
+  const score = new Map<string, number>();
+  const byKey = new Map<string, any>();
+  const keyOf = (item: any, idx: number) =>
+    String(item?.id ?? item?.chunkId ?? item?.nodeId ?? `${item?.filePath ?? ""}:${idx}`);
+
+  const add = (list: any[], weight: number) => {
+    for (let i = 0; i < list.length; i++) {
+      const k = keyOf(list[i], i);
+      score.set(k, (score.get(k) ?? 0) + weight / (60 + i + 1));
+      if (!byKey.has(k)) byKey.set(k, list[i]);
+    }
+  };
+
+  add(local, 1);
+  add(cloud, 1);
+
+  return [...score.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([k]) => byKey.get(k));
 }
 
 // ---------------------------------------------------------------------------
@@ -342,25 +377,7 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
   search_memories: async (args) => {
     const q = args?.query || "";
     const limit = args?.limit || 8;
-    let results = await getQuery().retrieve(q, limit);
-
-    // active_file boost: results from (or under) the caller's active file are
-    // promoted above equal-scoring matches from elsewhere in the workspace.
-    const activeFile: string | undefined = args?.active_file || args?.activeFile;
-    let boostNote: string | undefined;
-    if (activeFile && results.length > 1) {
-      const target = path.normalize(activeFile).toLowerCase();
-      const boosted = results.map((r: any) => {
-        const fp = typeof r.filePath === "string" ? path.normalize(r.filePath).toLowerCase() : "";
-        const isMatch = fp === target || fp.endsWith(`/${target}`) || fp.endsWith(`\\${target}`) || fp.includes(target);
-        return { r, b: isMatch ? 0.25 : 0 };
-      });
-      if (boosted.some((x) => x.b > 0)) {
-        boosted.sort((a, b) => b.r.score + b.b - (a.r.score + a.b));
-        results = boosted.map((x) => x.r);
-        boostNote = `Boosted results from ${activeFile}`;
-      }
-    }
+    const results = await getQuery().retrieve(q, limit);
 
     let cloudNodes: any[] = [];
     let source: "local" | "cloud" = "local";
@@ -383,8 +400,28 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
       }
     }
 
-    const seen = new Set(results.map((r: any) => r.id ?? r.chunkId ?? r.nodeId));
-    const merged = [...results, ...cloudNodes.filter((n) => !seen.has(n.id))].slice(0, limit);
+    // Rank-fuse local + cloud instead of local-first concatenation, so a
+    // strong cloud hit is not demoted behind weak local matches.
+    let merged = reciprocalRankFusion(results, cloudNodes, limit);
+
+    // active_file boost: results from (or under) the caller's active file are
+    // promoted above equal-scoring matches from elsewhere — applied to the
+    // fused ranking so cloud hits under the active file benefit too.
+    const activeFile: string | undefined = args?.active_file || args?.activeFile;
+    let boostNote: string | undefined;
+    if (activeFile && merged.length > 1) {
+      const target = path.normalize(activeFile).toLowerCase();
+      const boosted = merged.map((r: any) => {
+        const fp = typeof r.filePath === "string" ? path.normalize(r.filePath).toLowerCase() : "";
+        const isMatch = fp === target || fp.endsWith(`/${target}`) || fp.endsWith(`\\${target}`) || fp.includes(target);
+        return { r, b: isMatch ? 0.25 : 0 };
+      });
+      if (boosted.some((x) => x.b > 0)) {
+        boosted.sort((a, b) => b.r.score + b.b - (a.r.score + a.b));
+        merged = boosted.map((x) => x.r);
+        boostNote = `Boosted results from ${activeFile}`;
+      }
+    }
 
     const semanticAvailable = await getQuery().semanticAvailable();
     if (!semanticAvailable) {

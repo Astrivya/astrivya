@@ -44,6 +44,12 @@ export class AkgQuery {
 
       const emb = new AkgEmbedder();
       await emb.init(modelsDir);
+      // The embedder chain may resolve to "none" (no local model + no BYOK) —
+      // treat that as unavailable so callers fall back to keyword search.
+      if (!emb.available()) {
+        this.embedder = null;
+        return null;
+      }
       this.embedder = emb;
       return this.embedder;
     } catch (err: unknown) {
@@ -77,7 +83,7 @@ export class AkgQuery {
   async embedQuery(query: string): Promise<number[]> {
     try {
       const emb = await this.getEmbedder();
-      if (!emb) return [];
+      if (!emb || !emb.available()) return [];
       const v = await emb.embed(query);
       return Array.isArray(v) ? v : [];
     } catch {
