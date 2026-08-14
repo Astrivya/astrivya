@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/Astrivya/astrivya/compare/mcp-server-v0.4.0...mcp-server-v0.5.0) (2026-08-14)
+
+### Features
+
+* **akg,mcp:** BYOK embedder chain, cloud RRF fusion, shared watcher + prompts ([524798f](https://github.com/Astrivya/astrivya/commit/524798fb84bd6ea0d273fdda642165e86afc57cc))
+* **cli,mcp-server:** telemetry health events + stdio shutdown flush ([034222f](https://github.com/Astrivya/astrivya/commit/034222f505e6e012c5582df4d0d5aafc65f04ff5))
+
 ## [0.4.0](https://github.com/Astrivya/astrivya/compare/mcp-server-v0.3.0...mcp-server-v0.4.0) (2026-08-14)
 
 
