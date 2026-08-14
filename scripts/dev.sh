@@ -9,7 +9,7 @@ echo "=== Astrivya Dev Environment ==="
 # --- Pre-check: cloud repo ---
 if [ ! -d "$CLOUD_DIR" ]; then
   echo "ERROR: astrivya-infra repo not found at $CLOUD_DIR"
-  echo "Clone it first: git clone git@github.com:astrivya/astrivya-infra.git \"$CLOUD_DIR\""
+  echo "Clone it first: git clone git@github.com:amruthjakku/astrivya-infra.git \"$CLOUD_DIR\""
   exit 1
 fi
 
