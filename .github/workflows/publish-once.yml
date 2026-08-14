@@ -1,0 +1,53 @@
+name: Publish (one-off)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: publish-once
+  cancel-in-progress: false
+
+jobs:
+  # One-off: publish the already-tagged 0.4.0 (plugin-api 0.5.0) release to npm.
+  # release-please cannot consummate it (tags + GitHub releases were created
+  # manually after PR #26/#31), so the regular publish job never fires.
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Build all packages
+        run: npm run build:all
+
+      - name: Run tests
+        run: npm run test
+
+      - name: Run typecheck
+        run: npm run typecheck
+
+      - name: Verify MCP doc/tool-surface drift
+        run: npm run check:docs
+
+      - name: Publish packages in dependency order
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          order="packages/akg-core packages/plugin-api packages/plugin-runtime packages/akg-indexer packages/mcp-server packages/cli"
+          for p in $order; do
+            echo "=== publishing $p ==="
+            (cd "$p" && npm publish --access public)
+          done
