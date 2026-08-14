@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@astrivya/akg-indexer": "^0.4.0",
-    "@astrivya/plugin-api": "^0.4.0",
+    "@astrivya/plugin-api": "^0.5.0",
     "@astrivya/plugin-runtime": "^0.4.0",
     "@modelcontextprotocol/sdk": "^1.16.0",
     "env-paths": "^2.2.1",
