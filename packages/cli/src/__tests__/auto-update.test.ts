@@ -29,6 +29,11 @@ vi.mock("@astrivya/plugin-runtime", () => {
   };
 });
 
+vi.mock("../lib/telemetry", () => ({
+  capture: vi.fn(),
+  captureUpdateResult: vi.fn(),
+}));
+
 import {
   cascadeUpdate,
   consumeCascadeSyncFlag,

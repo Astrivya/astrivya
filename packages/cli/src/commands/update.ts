@@ -25,7 +25,7 @@ export function registerUpdate(program: Command): void {
     }
     const manager = detectInstallManager();
     info(`Update available: ${CURRENT_VERSION} ${color.dim("\u2192")} ${color.bold(latest)} (via ${manager}).`);
-    if (!runInstall(buildInstallCommand(manager))) {
+    if (!runInstall(buildInstallCommand(manager), undefined, latest)) {
       process.exitCode = 1;
       return;
     }
@@ -66,6 +66,11 @@ export function registerUpdate(program: Command): void {
           success(`Already up to date (${CURRENT_VERSION}). Use --force to reinstall.`);
           return;
         }
+        if (!runInstall(buildInstallCommand(detectInstallManager()), undefined, latest ?? undefined)) {
+          process.exitCode = 1;
+          return;
+        }
+        return;
       }
       if (!runInstall(buildInstallCommand(detectInstallManager()))) {
         process.exitCode = 1;

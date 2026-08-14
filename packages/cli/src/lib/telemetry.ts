@@ -187,3 +187,17 @@ export function endCommandTelemetry(exit: "ok" | "error", errorType?: string): v
     ...(errorType ? { error_type: errorType } : {}),
   });
 }
+
+/**
+ * Emit the auto-update result event. `to` is the target version (omitted when
+ * unknown, e.g. a forced reinstall); `errorType` only on failure. `error` is a
+ * forbidden property key, so failures use `error_type`. Fire-and-forget.
+ */
+export function captureUpdateResult(ok: boolean, from: string, to?: string, errorType?: string): void {
+  capture("oss_cli_update", {
+    ok,
+    from_version: from,
+    ...(to ? { to_version: to } : {}),
+    ...(errorType ? { error_type: errorType } : {}),
+  });
+}

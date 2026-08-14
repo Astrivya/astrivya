@@ -123,6 +123,26 @@ describe("telemetry", () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
+  it("captureUpdateResult emits oss_cli_update with ok and versions", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as Response);
+    telemetry.captureUpdateResult(true, "0.3.0", "0.4.0");
+    const body = JSON.parse(String((fetchSpy.mock.calls[0][1] as RequestInit).body));
+    expect(body.event).toBe("oss_cli_update");
+    expect(body.properties).toMatchObject({ ok: true, from_version: "0.3.0", to_version: "0.4.0" });
+  });
+
+  it("captureUpdateResult reports failure with error_type and no forbidden keys", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as Response);
+    telemetry.captureUpdateResult(false, "0.3.0", undefined, "ENOENT");
+    const body = JSON.parse(String((fetchSpy.mock.calls[0][1] as RequestInit).body));
+    expect(body.event).toBe("oss_cli_update");
+    expect(body.properties).toMatchObject({ ok: false, from_version: "0.3.0", error_type: "ENOENT" });
+    expect(body.properties.to_version).toBeUndefined();
+    for (const key of telemetry.captureForbiddenKeys) {
+      expect(Object.keys(body.properties)).not.toContain(key);
+    }
+  });
+
   it("banner prints once per install", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     telemetry.maybePrintTelemetryBanner();
