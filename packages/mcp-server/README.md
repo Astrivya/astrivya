@@ -89,6 +89,18 @@ Add to `~/.continue/config.json`:
 | `ASTRIVYA_SYNC_KEY` | Sync API key (optional) |
 | `ASTRIVYA_CLOUD_URL` | Cloud API URL (optional)      |
 
+## Telemetry
+
+The MCP server sends **anonymous, opt-out** usage stats (server starts/stops,
+session start/end, tool names, client name, and a random install id) to PostHog
+so we can improve the product. **No code, paths, arguments, query content,
+tokens, or any other sensitive data is ever collected.** Tool calls are sampled
+at most once per session per tool.
+
+- You'll see a one-time notice on stderr at startup.
+- Disable with `ASTRIVYA_TELEMETRY=off` or `NO_TELEMETRY=1`.
+- Telemetry is automatically disabled in CI environments.
+
 ## License
 
 Apache 2.0
