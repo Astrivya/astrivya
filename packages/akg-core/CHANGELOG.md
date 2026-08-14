@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.0](https://github.com/Astrivya/astrivya/compare/akg-core-v0.4.0...akg-core-v0.5.0) (2026-08-14)
+
+### Features
+
+* **akg,mcp:** BYOK embedder chain, cloud RRF fusion, shared watcher + prompts ([524798f](https://github.com/Astrivya/astrivya/commit/524798fb84bd6ea0d273fdda642165e86afc57cc))
+
 ## [0.4.0](https://github.com/Astrivya/astrivya/compare/akg-core-v0.3.0...akg-core-v0.4.0) (2026-08-14)
 
 

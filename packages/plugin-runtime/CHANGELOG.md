@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.0](https://github.com/Astrivya/astrivya/compare/plugin-runtime-v0.4.0...plugin-runtime-v0.5.0) (2026-08-14)
+
+Version bump only for this package.
+
 ## [0.4.0](https://github.com/Astrivya/astrivya/compare/plugin-runtime-v0.3.0...plugin-runtime-v0.4.0) (2026-08-14)
 
 
