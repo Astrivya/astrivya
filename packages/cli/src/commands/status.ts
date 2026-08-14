@@ -224,7 +224,9 @@ export function registerStatus(program: Command): void {
         // MCP Server
         subheader("MCP Server");
         if (mcpSummary.hasJournal) {
-          console.log(`  Sessions:     ${color.bold(`${mcpSummary.activeSessions} active / ${mcpSummary.sessions} total`)}`);
+          console.log(
+            `  Sessions:     ${color.bold(`${mcpSummary.activeSessions} active / ${mcpSummary.sessions} total`)}`,
+          );
           console.log(
             `  Tool calls:   ${color.bold(String(mcpSummary.toolCalls))}${mcpSummary.toolErrors > 0 ? color.yellow(` (${mcpSummary.toolErrors} errors)`) : ""}`,
           );

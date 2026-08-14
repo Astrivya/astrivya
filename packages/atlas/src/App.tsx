@@ -73,7 +73,15 @@ function App() {
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [mcpSessions, setMcpSessions] = useState<McpSessionInfo[] | null>(null);
   const [mcpToolStats, setMcpToolStats] = useState<Record<string, McpToolStat> | null>(null);
-  const [mcpLiveSummary, setMcpLiveSummary] = useState<{ version: string; mode: string; uptimeMs: number; sessions: number; activeSessions: number; toolCalls: number; toolErrors: number } | null>(null);
+  const [mcpLiveSummary, setMcpLiveSummary] = useState<{
+    version: string;
+    mode: string;
+    uptimeMs: number;
+    sessions: number;
+    activeSessions: number;
+    toolCalls: number;
+    toolErrors: number;
+  } | null>(null);
   const [mcpError, setMcpError] = useState<string | null>(null);
 
   // Mode Action Results
@@ -974,9 +982,7 @@ const EmbedMap = memo(function EmbedMap({
     const dot = 2.2;
     for (const p of points) {
       ctx.fillStyle =
-        p.community !== null && p.community !== undefined
-          ? `hsl(${(p.community * 137) % 360}, 65%, 62%)`
-          : "#565666";
+        p.community !== null && p.community !== undefined ? `hsl(${(p.community * 137) % 360}, 65%, 62%)` : "#565666";
       ctx.beginPath();
       ctx.arc(pad + p.x * (canvas.width - pad * 2), pad + p.y * (canvas.height - pad * 2), dot, 0, Math.PI * 2);
       ctx.fill();
@@ -1085,7 +1091,13 @@ function shortSid(id: string): string {
   return id.length <= 8 ? id : `${id.slice(0, 8)}\u2026`;
 }
 
-const SessionsPanel = memo(function SessionsPanel({ summary, sessions, toolStats, error, onClose }: SessionsPanelProps) {
+const SessionsPanel = memo(function SessionsPanel({
+  summary,
+  sessions,
+  toolStats,
+  error,
+  onClose,
+}: SessionsPanelProps) {
   const active = (sessions ?? []).filter((s) => !s.endedAt);
   const ended = (sessions ?? []).filter((s) => s.endedAt);
 
@@ -1106,8 +1118,7 @@ const SessionsPanel = memo(function SessionsPanel({ summary, sessions, toolStats
           <p>Atlas proxies the MCP server's live registry. Start an HTTP server so agents appear here:</p>
           <code>astrivya mcp-server --http --port 3001</code>
           <p className="sessions-error-hint">
-            (or point <code>ASTRIVYA_MCP_URL</code> at the right endpoint, e.g.{" "}
-            <code>http://localhost:3001</code>)
+            (or point <code>ASTRIVYA_MCP_URL</code> at the right endpoint, e.g. <code>http://localhost:3001</code>)
           </p>
         </div>
       ) : summary ? (

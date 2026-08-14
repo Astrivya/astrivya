@@ -153,14 +153,31 @@ export function journalSessionRows(
   // without ids fall back to a pid-scoped key.
   const key = (e: Record<string, unknown>) =>
     e.session_id ? `sid:${String(e.session_id)}` : `pid:${String(e.pid ?? "?")}`;
-  const sessions = new Map<string, { client: string | null; pid: number | null; ended: boolean; toolCalls: number; lastTool: string | null; lastTs: number }>();
+  const sessions = new Map<
+    string,
+    {
+      client: string | null;
+      pid: number | null;
+      ended: boolean;
+      toolCalls: number;
+      lastTool: string | null;
+      lastTs: number;
+    }
+  >();
 
   for (const e of events) {
     const k = key(e);
     if (e.type === "session_start") {
       if (!sessions.has(k)) {
         const pid = Number(e.pid);
-        sessions.set(k, { client: (e.client as string | null) ?? null, pid: pid > 0 ? pid : null, ended: false, toolCalls: 0, lastTool: null, lastTs: Date.parse(String(e.ts)) || 0 });
+        sessions.set(k, {
+          client: (e.client as string | null) ?? null,
+          pid: pid > 0 ? pid : null,
+          ended: false,
+          toolCalls: 0,
+          lastTool: null,
+          lastTs: Date.parse(String(e.ts)) || 0,
+        });
       }
     } else if (e.type === "session_end") {
       const s = sessions.get(k);
@@ -201,7 +218,10 @@ function renderLiveStatus(live: Record<string, unknown>, tokens: Record<string, 
     lastTool: string | null;
     endedAt: number | null;
   }>;
-  const tools = (live.tools || {}) as Record<string, { count: number; errors: number; lastMs: number | null; p50Ms: number | null; p95Ms: number | null }>;
+  const tools = (live.tools || {}) as Record<
+    string,
+    { count: number; errors: number; lastMs: number | null; p50Ms: number | null; p95Ms: number | null }
+  >;
 
   console.log(`\n  Astrivya MCP Server — ${color.green("live")}`);
   console.log(`  ${"\u2500".repeat(46)}`);
@@ -315,10 +335,13 @@ function renderMetrics(live: Record<string, unknown> | null): void {
     "astrivya_mcp_uptime_seconds",
     "Seconds since the server process started.",
     "gauge",
-    `astrivya_mcp_uptime_seconds ${Math.floor((Number(live?.uptimeMs ?? 0)) / 1000)}`,
+    `astrivya_mcp_uptime_seconds ${Math.floor(Number(live?.uptimeMs ?? 0) / 1000)}`,
   );
 
-  const tools = (live?.tools || {}) as Record<string, { count: number; errors: number; p50Ms: number | null; p95Ms: number | null; lastMs: number | null }>;
+  const tools = (live?.tools || {}) as Record<
+    string,
+    { count: number; errors: number; p50Ms: number | null; p95Ms: number | null; lastMs: number | null }
+  >;
   const calls: string[] = [];
   const errors: string[] = [];
   const latency: string[] = [];
@@ -343,7 +366,14 @@ function renderMetrics(live: Record<string, unknown> | null): void {
     latency,
   );
 
-  const sessions = (live?.sessionsList || []) as Array<{ id: string; client: string | null; mode: string; startedAt: number; toolCalls: number; endedAt: number | null }>;
+  const sessions = (live?.sessionsList || []) as Array<{
+    id: string;
+    client: string | null;
+    mode: string;
+    startedAt: number;
+    toolCalls: number;
+    endedAt: number | null;
+  }>;
   const sessionInfo: string[] = [];
   const sessionCalls: string[] = [];
   const sessionUptime: string[] = [];
@@ -472,9 +502,7 @@ export function registerMcp(program: Command): void {
       if (wantLive) {
         const live = await fetchMcpLive("/status");
         if (!live) {
-          console.error(
-            color.red(`No MCP HTTP server reachable at ${mcpHttpBase()}.`),
-          );
+          console.error(color.red(`No MCP HTTP server reachable at ${mcpHttpBase()}.`));
           console.error(color.dim("  Start one with:  astrivya mcp-server --http --port 3001"));
           console.error(color.dim("  Or point ASTRIVYA_MCP_URL at the right endpoint."));
           process.exitCode = 1;
@@ -519,7 +547,12 @@ export function registerMcp(program: Command): void {
         console.log(`  ${color.bold("Sessions")}`);
         console.log(`  ${color.dim("  ID        CLIENT    STATE   TOOLS  LAST TOOL")}`);
         for (const r of modern) {
-          const state = r.state === "active" ? color.green("ACTIVE") : r.state === "orphan" ? color.dim("orphan") : color.dim("ended");
+          const state =
+            r.state === "active"
+              ? color.green("ACTIVE")
+              : r.state === "orphan"
+                ? color.dim("orphan")
+                : color.dim("ended");
           const dim = r.state !== "active" ? color.dim("") : "";
           console.log(
             `  ${shortId(r.id).padEnd(8)}  ${(r.client || "-").slice(0, 8).padEnd(8)}  ${dim}${state}  ${String(r.toolCalls).padEnd(5)}  ${r.state === "active" ? color.cyan(String(r.lastTool ?? "-")) : color.dim(String(r.lastTool ?? "-"))}`,
@@ -533,7 +566,12 @@ export function registerMcp(program: Command): void {
           console.log(`  ${color.bold("Sessions (legacy, pre-session-id)")}`);
           console.log(`  ${color.dim("  ID        CLIENT    STATE   TOOLS  LAST TOOL")}`);
           for (const r of legacy) {
-            const state = r.state === "active" ? color.green("ACTIVE") : r.state === "orphan" ? color.dim("orphan") : color.dim("ended");
+            const state =
+              r.state === "active"
+                ? color.green("ACTIVE")
+                : r.state === "orphan"
+                  ? color.dim("orphan")
+                  : color.dim("ended");
             console.log(
               `  ${r.id.padEnd(8)}  ${(r.client || "-").slice(0, 8).padEnd(8)}  ${state}  ${String(r.toolCalls).padEnd(5)}  ${color.dim(String(r.lastTool ?? "-"))}`,
             );
@@ -543,7 +581,9 @@ export function registerMcp(program: Command): void {
           const alive = legacy.filter((r) => r.state === "active").length;
           const orphaned = legacy.filter((r) => r.state === "orphan").length;
           const ended = legacy.filter((r) => r.state === "ended").length;
-          console.log(`  ${color.dim(`${legacy.length} legacy sessions (pre-session-id journal) — ${alive} alive / ${orphaned} orphaned${ended > 0 ? ` / ${ended} ended` : ""}`)}`);
+          console.log(
+            `  ${color.dim(`${legacy.length} legacy sessions (pre-session-id journal) — ${alive} alive / ${orphaned} orphaned${ended > 0 ? ` / ${ended} ended` : ""}`)}`,
+          );
           console.log(`  ${color.dim("  expand with --all")}`);
           console.log();
         }

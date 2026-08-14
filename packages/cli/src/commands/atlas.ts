@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
 import { AkgStorage, GraphTraversal, ImpactAnalyzer } from "@astrivya/akg-core";
-import { AkgIndexer } from "@astrivya/akg-indexer";
+import { AkgIndexer, Watcher } from "@astrivya/akg-indexer";
 import type { Command } from "commander";
 import { color, error, getErrorMessage, info } from "../lib/output";
 
@@ -402,70 +402,30 @@ export function registerAtlas(program: Command): void {
         info(`\n🚀 ${color.bold("Astrivya Atlas serving active at:")} ${color.cyan(url)}`);
         info(`   Database workspace: ${color.dim(workspacePath)}\n`);
 
-        // Start file watcher
-        let debounceTimer: NodeJS.Timeout | null = null;
-        const pendingChanges = new Set<string>();
-        const ignoredExtensions = new Set([".json", ".lock", ".db", ".log", ".tmp"]);
-
-        try {
-          fs.watch(workspacePath, { recursive: true }, (_event, filename) => {
-            if (!filename) return;
-
-            const parts = filename.replace(/\\/g, "/").split("/");
-            if (
-              parts.some(
-                (p) =>
-                  p.startsWith(".") ||
-                  p === "node_modules" ||
-                  p === "dist" ||
-                  p === "out" ||
-                  p === "coverage" ||
-                  p === "graphify-out" ||
-                  p === ".astrivya",
-              )
-            ) {
-              return;
-            }
-
-            const ext = path.extname(filename).toLowerCase();
-            if (ignoredExtensions.has(ext)) return;
-
-            const fullPath = path.join(workspacePath, filename);
-
-            // Check if file still exists on disk
-            if (!fs.existsSync(fullPath)) return;
-            try {
-              if (!fs.statSync(fullPath).isFile()) return;
-            } catch {
-              return;
-            }
-
-            pendingChanges.add(fullPath);
-
-            if (debounceTimer) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(async () => {
-              const changes = Array.from(pendingChanges);
-              pendingChanges.clear();
-
-              const indexer = new AkgIndexer(storage, workspacePath);
-
-              for (const file of changes) {
-                try {
-                  const wasUpdated = await indexer.indexFile(file);
-                  if (wasUpdated) {
-                    const rel = path.relative(workspacePath, file).replace(/\\/g, "/");
-                    const updateMsg = `data: ${JSON.stringify({ type: "update", file: rel })}\n\n`;
-                    activeClients.forEach((client) => client.write(updateMsg));
-                  }
-                } catch (_err: unknown) {
-                  // silent warning for busy files
+        // Start file watcher (shared Watcher: debounced, noise-filtered).
+        // Changes are indexed incrementally and pushed to SSE clients.
+        const indexer = new AkgIndexer(storage, workspacePath);
+        const watcher = new Watcher(
+          async (files) => {
+            for (const file of files) {
+              try {
+                const wasUpdated = await indexer.indexFile(file);
+                if (wasUpdated) {
+                  const rel = path.relative(workspacePath, file).replace(/\\/g, "/");
+                  const updateMsg = `data: ${JSON.stringify({ type: "update", file: rel })}\n\n`;
+                  activeClients.forEach((client) => client.write(updateMsg));
                 }
+              } catch {
+                // silent warning for busy files
               }
-            }, 600);
-          });
-        } catch (err: unknown) {
-          info(`File watcher failed to start: ${getErrorMessage(err)}`);
+            }
+          },
+          { onError: (err) => info(`File watcher error: ${getErrorMessage(err)}`) },
+        );
+        if (!watcher.start(workspacePath)) {
+          info("File watcher failed to start — graph updates are manual (`astrivya akg reindex`).");
         }
+        process.once("SIGINT", () => watcher.stop());
 
         // Auto-open browser
         const cmd =
@@ -516,10 +476,7 @@ export function pca2(vectors: number[][]): number[][] {
     return pc;
   };
 
-  const pc1 = powerIteration(
-    centered,
-    new Array(d).fill(1),
-  );
+  const pc1 = powerIteration(centered, new Array(d).fill(1));
   const project = (row: number[], pc: number[]): number => {
     let dot = 0;
     for (let i = 0; i < d; i++) dot += row[i] * pc[i];
