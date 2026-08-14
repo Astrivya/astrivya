@@ -16,7 +16,177 @@ import {
   saveLicenseKey,
   startOAuthServer,
 } from "../lib/compat";
-import { getErrorMessage, json as printJson } from "../lib/output";
+import { color, getErrorMessage, json as printJson } from "../lib/output";
+import { prompt, promptHidden } from "../lib/prompt";
+
+export type LoginMethod = "browser" | "token" | "cancel";
+
+export function parseLoginChoice(input: string): LoginMethod | null {
+  const v = input.trim().toLowerCase();
+  if (["1", "b", "browser"].includes(v)) return "browser";
+  if (["2", "t", "token", "paste"].includes(v)) return "token";
+  if (["3", "c", "cancel", "q", "quit"].includes(v)) return "cancel";
+  return null;
+}
+
+export interface OAuthProbeResult {
+  ok: boolean;
+  url: string;
+  issue?: string;
+}
+
+/**
+ * Pre-flight check on the cloud OAuth entry point. The CLI must not open a
+ * browser page that is guaranteed to fail — e.g. when the cloud server is
+ * missing its GitHub client id (the authorize URL comes back with an empty
+ * `client_id=`). Returns the reason when the flow looks broken.
+ */
+export async function probeOAuthConfig(baseUrl: string, port: number, provider = "github"): Promise<OAuthProbeResult> {
+  const url = `${baseUrl}/auth/cli?cli_port=${port}${provider !== "github" ? `&provider=${provider}` : ""}`;
+  try {
+    const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(8000) });
+    const loc = res.headers.get("location") || "";
+    const clientId = /[?&]client_id=([^&]*)/.exec(loc)?.[1];
+    if (!clientId) {
+      return {
+        ok: false,
+        url,
+        issue: `cloud OAuth looks misconfigured (empty client id from ${baseUrl}) — the browser page would show an error`,
+      };
+    }
+    return { ok: true, url };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      url,
+      issue: `could not reach ${baseUrl} (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+}
+
+/** Warn when a leftover env token silently shadows the freshly stored one. */
+function warnEnvTokenShadow(): void {
+  const envToken = process.env.ASTRIVYA_TOKEN;
+  if (!envToken) return;
+  console.log(`  ${color.yellow("Note:")} ASTRIVYA_TOKEN is set in your environment and shadows stored credentials.`);
+  console.log(
+    '  Unset it (e.g. `setx ASTRIVYA_TOKEN ""` on Windows) and open a new terminal for the new token to take effect.',
+  );
+}
+
+async function syncPluginsAfterLogin(): Promise<void> {
+  try {
+    const token = getPremiumAuth();
+    if (!token) return;
+    const pm = new PluginManager(undefined, getBaseUrl());
+    const syncResult = await pm.sync(token);
+    if (syncResult.synced.length > 0) {
+      console.error(`[Astrivya] Installed ${syncResult.synced.length} plugin(s)`);
+    }
+    if (syncResult.updated.length > 0) {
+      console.error(`[Astrivya] Updated ${syncResult.updated.length} plugin(s)`);
+    }
+    if (syncResult.failed.length > 0) {
+      console.error(`[Astrivya] ${syncResult.failed.length} plugin(s) failed to install`);
+    }
+  } catch {
+    // Plugin sync failed — user can run `astrivya plugins sync` later
+  }
+}
+
+async function runBrowserFlow(port: number, provider = "github"): Promise<{ profile?: { email?: string } }> {
+  const baseUrl = getBaseUrl();
+
+  const probe = await probeOAuthConfig(baseUrl, port, provider);
+  const authUrl = probe.url;
+  if (probe.ok) {
+    console.log("  Opening browser…");
+    console.log(`  If it doesn't open, visit: ${authUrl}`);
+  } else {
+    console.log(`  ${color.yellow("Note:")} ${probe.issue}.`);
+    console.log("  You can still continue in the browser, or paste a token instead.");
+    console.log(`  URL: ${authUrl}`);
+  }
+  await openBrowser(authUrl);
+
+  console.log("  Waiting for authentication callback… (Ctrl-C to cancel)");
+  const result = await startOAuthServer(port);
+
+  saveConfig({ token: result.token, baseUrl });
+  warnEnvTokenShadow();
+
+  // Exchange short-lived session token for a long-lived personal access token (PAT) for the device
+  try {
+    const hn = hostname();
+    const deviceName = `${hn} - CLI`;
+    const tokenResult = await apiCall("/api/ide/token", "POST", { device_name: deviceName });
+    if (tokenResult?.token) {
+      saveConfig({ token: tokenResult.token });
+    }
+  } catch {
+    // Fallback to using the session token if the exchange endpoint fails
+  }
+
+  await syncPluginsAfterLogin();
+  return result;
+}
+
+export async function runTokenLogin(token?: string): Promise<boolean> {
+  const baseUrl = getBaseUrl();
+  let value = token;
+  if (!value) {
+    value = (await promptHidden("  Paste your token: ")).trim();
+    if (!value) {
+      console.log("  No token entered. Login cancelled.");
+      return false;
+    }
+  }
+
+  const res = await fetch(`${baseUrl}/api/ide/me`, {
+    headers: { Authorization: `Bearer ${value}` },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    console.error(`  Token rejected by server (HTTP ${res.status}).`);
+    return false;
+  }
+
+  saveConfig({ token: value, baseUrl });
+  console.log("  ✓ Token validated and saved.");
+  warnEnvTokenShadow();
+  await syncPluginsAfterLogin();
+  return true;
+}
+
+async function askLoginMethod(): Promise<LoginMethod> {
+  console.log();
+  console.log("  How would you like to sign in?");
+  console.log("    1) Browser  — open the cloud login page (recommended)");
+  console.log("    2) Paste a token  — from the Astrivya dashboard or an existing token");
+  console.log("    3) Cancel");
+  for (;;) {
+    const raw = await prompt("  Choice [1-3]: ");
+    const method = parseLoginChoice(raw);
+    if (method) return method;
+    console.log(`  "${raw.trim()}" isn't a valid choice. Enter 1, 2, or 3.`);
+  }
+}
+
+function printLoginSuccess(result?: { profile?: { email?: string } }): void {
+  const email = result?.profile?.email || "";
+  console.log(`\n✓ Authenticated${email ? ` as ${email}` : ""}.`);
+  console.log(`
+  Next steps:
+  1. astrivya setup           → Configuration wizard
+  2. astrivya sync github     → Import your repos
+  3. astrivya decision log    → Log your first decision
+  4. astrivya who <topic>     → Discover team expertise
+  5. astrivya context <topic> → Get context on any topic
+  6. Install the VS Code extension → https://astrivya.ai/extension
+
+  Tip: use \`astrivya s "query"\` as a shortcut for search
+`);
+}
 
 export async function runLoginFlow(): Promise<{ profile?: { email?: string } }> {
   const existing = getToken();
@@ -29,50 +199,7 @@ export async function runLoginFlow(): Promise<{ profile?: { email?: string } }> 
     throw new Error("Could not find a free port for the auth callback server.");
   }
 
-  const baseUrl = getBaseUrl();
-  const authUrl = `${baseUrl}/auth/cli?cli_port=${port}`;
-
-  console.log("Opening browser for authentication...");
-  await openBrowser(authUrl);
-
-  console.log("Waiting for authentication callback...");
-  const result = await startOAuthServer(port);
-
-  saveConfig({ token: result.token, baseUrl });
-
-  // Exchange short-lived token for a long-lived personal access token (PAT) for the device
-  try {
-    const hn = hostname();
-    const deviceName = `${hn} - CLI`;
-    const tokenResult = await apiCall("/api/ide/token", "POST", { device_name: deviceName });
-    if (tokenResult?.token) {
-      saveConfig({ token: tokenResult.token });
-    }
-  } catch {
-    // Fallback to using the session token if the exchange endpoint fails
-  }
-
-  // Sync plugins after successful login
-  try {
-    const token = getPremiumAuth();
-    if (token) {
-      const pm = new PluginManager(undefined, getBaseUrl());
-      const syncResult = await pm.sync(token);
-      if (syncResult.synced.length > 0) {
-        console.error(`[Astrivya] Installed ${syncResult.synced.length} plugin(s)`);
-      }
-      if (syncResult.updated.length > 0) {
-        console.error(`[Astrivya] Updated ${syncResult.updated.length} plugin(s)`);
-      }
-      if (syncResult.failed.length > 0) {
-        console.error(`[Astrivya] ${syncResult.failed.length} plugin(s) failed to install`);
-      }
-    }
-  } catch {
-    // Plugin sync failed — user can run `astrivya plugins sync` later
-  }
-
-  return result;
+  return runBrowserFlow(port);
 }
 
 export function registerAuth(program: Command): void {
@@ -80,24 +207,50 @@ export function registerAuth(program: Command): void {
 
   auth
     .command("login")
-    .description("Authenticate with Astrivya (opens browser)")
-    .action(async () => {
+    .description("Authenticate with Astrivya")
+    .option("-t, --token <token>", "Authenticate with an existing token (non-interactive)")
+    .option("-p, --provider <name>", "OAuth provider: github or google (default: github)")
+    .action(async (options) => {
       try {
-        const result = await runLoginFlow();
+        if (options.token) {
+          const ok = await runTokenLogin(options.token);
+          if (!ok) {
+            process.exitCode = 1;
+            return;
+          }
+          printLoginSuccess();
+          return;
+        }
 
-        const email = result.profile?.email || "";
-        console.log(`\n✓ Authenticated${email ? ` as ${email}` : ""}.`);
-        console.log(`
-  Next steps:
-  1. astrivya setup           → Configuration wizard
-  2. astrivya sync github     → Import your repos
-  3. astrivya decision log    → Log your first decision
-  4. astrivya who <topic>     → Discover team expertise
-  5. astrivya context <topic> → Get context on any topic
-  6. Install the VS Code extension → https://astrivya.ai/extension
+        if (!process.stdin.isTTY) {
+          console.log("  Non-interactive terminal detected.");
+          console.log("  Use `astrivya auth login --token <token>` (or `astrivya auth token --set <token>`).");
+          process.exitCode = 1;
+          return;
+        }
 
-  Tip: use \`astrivya s "query"\` as a shortcut for search
-`);
+        const method = await askLoginMethod();
+        if (method === "cancel") {
+          console.log("  Login cancelled.");
+          process.exitCode = 1;
+          return;
+        }
+
+        let result: { profile?: { email?: string } } | undefined;
+        if (method === "browser") {
+          const port = await findFreePort(18080);
+          if (!port) {
+            throw new Error("Could not find a free port for the auth callback server.");
+          }
+          result = await runBrowserFlow(port, options.provider);
+        } else {
+          const ok = await runTokenLogin();
+          if (!ok) {
+            process.exitCode = 1;
+            return;
+          }
+        }
+        printLoginSuccess(result);
       } catch (err: unknown) {
         console.error("Authentication failed:", getErrorMessage(err));
         process.exitCode = 1;

@@ -42,23 +42,19 @@ Start both repos together:
 bash scripts/dev.sh
 ```
 
-## Private Registry (Verdaccio)
+## Private Packages & Registry
 
 Proprietary `@astrivya/*` packages (cloud, cloud-cli, cloud-mcp, cloud-api,
-cron-worker, infra-shared, mcp-gateway — all `0.1.1`, license `FSL-1.1-ALv2`)
-are published on a self-hosted **Verdaccio** registry at
-**`https://npm.astrivya.ai`** (Caddy route → `verdaccio:4873` on the VM; see
-§20 in ops-findings). All 7 are available on the registry as `0.1.1` (the
-original `0.1.0` uploads are superseded by `latest`).
+cron-worker, infra-shared, mcp-gateway — license `FSL-1.1-ALv2`) are **NOT**
+published to public npm. They live in the private sibling repo
+`../astrivya-infra/` and publish to the private registry only (auth required,
+never proxied to public npm). Full private-registry operations (publish CI,
+credentials, VM checkout, auth gotchas) are documented in that repo's
+`AGENTS.md` and the private workspace's `ops-findings.md` — deliberately NOT
+in this public repo.
 
-- **Guard:** every infra package carries `publishConfig: { access: "restricted", registry: "https://npm.astrivya.ai/" }`. Do **not** set `private: true` — npm refuses to publish `private` packages even to the private registry.
-- **@astrivya/* never proxies to public npm** in the verzaccio config (`proxy: none`); scope reads require auth.
-- **Publish (preferred, CI):** `.github/workflows/publish-private.yml` in `astrivya-infra` (live 2026-08-14, commit `3c0664e`) — tag `cloud-<pkg>@<version>` (e.g. `cloud-api@0.2.0`) or manual dispatch (`all` / any of the 7). It builds first (packages ship `dist/` only, NO prepack hook), preflights auth, publishes cloud-api before cloud-cli/cloud-mcp (runtime dep), verifies each version resolves post-publish. Requires repo secrets `VERDACCIO_ADMIN_USER` + `VERDACCIO_ADMIN_PASSWORD` (set 2026-08-14).
-- **Publish (manual):** `scripts/publish-private.sh [--build] [--env-file <path>] [package-dir ...]` in `astrivya-infra` (idempotent; `--build` runs tsup before packing; auth preflight + post-publish verify built in). The repo is also cloned at `/home/azureuser/astrivya-infra` on the VM (read-only deploy key `astrivya_infra`; pull with `GIT_SSH_COMMAND="ssh -i ~/.ssh/astrivya_infra"`). Creds from `VERDACCIO_ADMIN_USER`/`VERDACCIO_ADMIN_PASSWORD` env or `--env-file /home/azureuser/astrivya/.env`. Never print the password.
-- **Auth gotcha:** use the legacy `//npm.astrivya.ai/:_auth=<base64 user:pass>` key (Basic); Verdaccio v5 rejects npm's default `_authToken` (Bearer) with 401. Auth preflight checks `/-/whoami` for the username **in the response body** — whoami returns HTTP 200 even anonymously (body `{}`).
-- **Leak guard:** NEVER create a workflow that publishes `@astrivya/cloud*`/`infra-shared`/`mcp-gateway` to public npmjs — the old `publish.yml` (deleted 2026-08-14) leaked `cloud-api`/`cloud-cli`/`cloud-mcp` 0.1.0 to public npm (deprecated there).
-- All 7 packages ship `dist` (+ `LICENSE`, `README.md` via `files`) **except `cron-worker`**, which is a Cloudflare Workers source package (no `dist`/`main`; wrangler compiles from `src` at deploy time). Do **not** add a `files`/`main` to it.
-- **FSL license keys are the entitlement source** (infra `285e3a7`/`92b5ebc`): a verified `astlk_` key drives the tier used by `plugins/manifest`, `sync`, `briefings`, and `/api/ide/me` (subscriptions are fallback); `/api/ide/me` reads display fields from `profiles` (not `users`) and returns `org.tier` + `license` — the mcp-gateway depends on this to gate Cloud MCP. Do not add `full_name`/`avatar_url` selects against `users`.
+- **Leak guard:** NEVER add a workflow in this repo (or re-create the deleted infra one) that publishes `@astrivya/cloud*`/`infra-shared`/`mcp-gateway` to public npmjs — an old infra workflow did (Aug 2026) and leaked three 0.1.0 packages before being deleted and unpublished.
+- `cron-worker` is a Cloudflare Workers source package (no `dist`/`main`; wrangler compiles from `src` at deploy time). Do **not** add a `files`/`main` to it.
 
 ## Cross-Repo Dev
 
@@ -70,13 +66,13 @@ original `0.1.0` uploads are superseded by `latest`).
 
 **Why no cloud packages on public npm:** the 7 proprietary packages (`cloud`,
 `cloud-api`, `cloud-cli`, `cloud-mcp`, `cron-worker`, `infra-shared`,
-`mcp-gateway` — all `0.1.1`, license `FSL-1.1-ALv2`) live only in the private
-`../astrivya-infra/` repo and publish only to the private Verdaccio registry.
-The `@astrivya:registry=https://npm.astrivya.ai/` scope mapping exists **only in
-the infra repo's `.npmrc`**; the OSS repo maps no scope, so its packages land on
-npmjs.org. Verified 2026-08-14: zero `@astrivya/cloud*`/`infra-shared`/
-`mcp-gateway` imports in any OSS `package.json` or `.ts` file, and no
-`npm.astrivya.ai` references in the published `cli@0.4.0` dist.
+`mcp-gateway` — license `FSL-1.1-ALv2`) live only in the private
+`../astrivya-infra/` repo and publish only to the private registry. A
+private-scope registry mapping exists **only in the infra repo's `.npmrc`**;
+the OSS repo maps no scope, so its packages land on npmjs.org. Verified
+2026-08-14: zero `@astrivya/cloud*`/`infra-shared`/`mcp-gateway` imports in
+any OSS `package.json` or `.ts` file, and no private-registry references in
+the published `cli@0.4.0` dist.
 
 **How OSS reaches the cloud (package-free channels):**
 - **HTTP:** `syncCall()` in `packages/mcp-server/src/api.ts` → `https://api.astrivya.ai`
@@ -118,7 +114,7 @@ Monorepo release automation is handled by **release-please** (`.github/release-p
 - Before 1.0.0, a `BREAKING CHANGE` on a `0.x` package jumps straight to `1.0.0` — keep breaking/feature bumps as `minor` until 1.0 unless a major is intended.
 - **Bundled libs:** `@astrivya/akg-core`, `@astrivya/akg-indexer`, `@astrivya/plugin-runtime`, `@astrivya/plugin-api` are bundled into the CLI dist (and the libs the server uses into `mcp-server` dist). So `astrivya update` or `npm i -g @astrivya/mcp-server@latest` ships the newest libs too — no semver-range drift. The pure packages are still published for direct npm consumers.
 - **One-time bootstrap only:** the initial `0.1.0` of all six packages must be published before anything is installable — run `npm run release:bootstrap` once. After that, release-please handles all releases (no manual version edits).
-- Publishing uses `NPM_TOKEN` (repo is private; no OIDC/provenance).
+- Publishing uses `NPM_TOKEN` (repo is public; no OIDC/provenance).
 - **Self-driving ceremony (2026-08-14):** release.yml now triggers on `push` to main, so every merge runs release-please automatically (manual dispatch still works). The "Prepare release branch" step pushes with `RELEASE_PLEASE_TOKEN` (a human PAT) — GITHUB_TOKEN pushes are suppressed by GitHub, so their CI never reports and branch protection blocks the release PR. The "Enable auto-merge" step then hands the release PR to `gh pr merge --auto`; when its checks pass it merges, and the merge push re-triggers the workflow → releases + tags → publish job. If auto-merge stalls (e.g. release-please force-pushed mid-cycle), the next run re-enables it. Gap-fill single-package publishes: `publish-tagged.yml`.
 - **Known release-please blind spot (2026-08-14):** commits merged to main via a MERGE commit (not squash) are invisible to release-please when their PR merge message isn't Conventional — e.g. `524798f feat(akg,mcp): BYOK embedder chain…` (via PR #27) was never picked up, so the 0.5.0 release needed a manual release PR. If release-please reports "No user facing commits found", check `git log <last-tag>..main -- packages/<pkg>` for merge-commit-swept features and prefer squash merges going forward.
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/Astrivya/astrivya/compare/cli-v0.4.0...cli-v0.5.0) (2026-08-14)
+
+### Features
+
+* **cli:** auth login method menu + OAuth pre-flight probe ([ef2a1fa](https://github.com/Astrivya/astrivya/commit/ef2a1fa6c7c7b9a68864b1206c370a841b9173d3))
+* **cli,mcp-server:** telemetry health events + stdio shutdown flush ([034222f](https://github.com/Astrivya/astrivya/commit/034222f505e6e012c5582df4d0d5aafc65f04ff5))
+
 ## [0.4.0](https://github.com/Astrivya/astrivya/compare/cli-v0.3.0...cli-v0.4.0) (2026-08-14)
 
 

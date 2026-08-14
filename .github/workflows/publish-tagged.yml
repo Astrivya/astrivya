@@ -37,8 +37,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build package
-        run: npm run build --workspace=${{ inputs.package }}
+      - name: Build workspace (dependency order)
+        # Bundler packages (cli, mcp-server) inline their @astrivya libs via
+        # tsup; a fresh tag checkout has no dist/ for those libs, so build the
+        # full workspace first (build:all runs in dependency order). Building
+        # only the target package fails to resolve bundled libs.
+        run: npm run build:all
 
       - name: Publish package
         env:
