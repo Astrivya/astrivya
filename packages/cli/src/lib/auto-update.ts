@@ -6,6 +6,7 @@ import { PluginManager } from "@astrivya/plugin-runtime";
 import envPaths from "env-paths";
 import { getBaseUrl, getPremiumAuth, loadConfig } from "./compat";
 import { error, info, startSpinner, success } from "./output";
+import { capture, captureUpdateResult } from "./telemetry";
 import {
   CACHE_FILE,
   type UpdateCache,
@@ -156,6 +157,7 @@ export function consumeCascadeSyncFlag(): boolean {
 export function cascadeUpdate(manager: ReturnType<typeof detectInstallManager>, execFn: ExecFn = runExec): void {
   const spinner = startSpinner("Updating @astrivya/mcp-server\u2026");
   const result = updateStandaloneMcp(manager, execFn);
+  capture("oss_mcp_cascade_update", { ok: result.kind === "updated", reason: result.kind });
   if (result.kind === "updated") {
     spinner.succeed();
     success("Also updated @astrivya/mcp-server. Restart your MCP client to use it.");
@@ -172,7 +174,7 @@ export function cascadeUpdate(manager: ReturnType<typeof detectInstallManager>, 
   spinner.stop();
 }
 
-export function runInstall(cmd: string, file = CACHE_FILE): boolean {
+export function runInstall(cmd: string, file = CACHE_FILE, toVersion?: string): boolean {
   const spinner = startSpinner("Installing the latest astrivya\u2026");
   try {
     execSync(cmd, { stdio: "pipe", encoding: "utf8", timeout: INSTALL_TIMEOUT_MS });
@@ -180,10 +182,12 @@ export function runInstall(cmd: string, file = CACHE_FILE): boolean {
     markUpdateSucceeded(file);
     cascadeUpdate(detectInstallManager());
     success("Updated to the latest version. Next command uses the new version.");
+    captureUpdateResult(true, CURRENT_VERSION, toVersion);
     return true;
   } catch (err: unknown) {
     spinner.fail();
     markUpdateFailed(file);
+    captureUpdateResult(false, CURRENT_VERSION, toVersion, err instanceof Error ? err.name : "UnknownError");
     // execSync discards the child's output on failure — surface the captured
     // stderr/stdout tail so failed installs are self-explaining (the npm
     // debug log alone is not enough to diagnose why an install died).
@@ -228,7 +232,7 @@ export async function maybeAutoUpdate(
     /** Skip the once-per-day throttle (session starts — the TUI) */
     forceCheck?: boolean;
     fetcher?: () => Promise<string | null>;
-    installer?: (cmd: string) => boolean;
+    installer?: (cmd: string, toVersion?: string) => boolean;
   } = {},
   file = CACHE_FILE,
 ): Promise<void> {
@@ -254,7 +258,7 @@ export async function maybeAutoUpdate(
   const cmd = buildInstallCommand(manager);
   const installer = opts.installer ?? runInstall;
   if (getUpdateMode() === "on") {
-    installer(cmd);
+    installer(cmd, result);
     return;
   }
   if (!process.stdin.isTTY) {
@@ -269,7 +273,7 @@ export async function maybeAutoUpdate(
     info("Skipped. Run `astrivya update` anytime.");
     return;
   }
-  installer(cmd);
+  installer(cmd, result);
 }
 
 export interface PluginSyncCache {

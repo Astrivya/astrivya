@@ -269,15 +269,25 @@ async function runStdioServer() {
   recordSessionStart({ client: "stdio" });
   console.error("Astrivya MCP Server is listening on Standard I/O.");
 
+  let shutdownOnce = false;
   const shutdown = (signal: string) => {
+    if (shutdownOnce) return;
+    shutdownOnce = true;
     recordServerStop(signal);
     void transport
       .close()
       .catch(() => {})
-      .finally(() => process.exit(0));
+      // Brief drain window so the fire-and-forget telemetry/journal flushes
+      // have a chance to leave the process before the hard exit.
+      .finally(() => setTimeout(() => process.exit(0), 250));
   };
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
+  // MCP stdio convention: the client closes stdin to signal exit. Many clients
+  // never deliver SIGINT/SIGTERM, so this hook is what actually ends sessions
+  // and flushes server_stop/session_end telemetry (they'd otherwise be lost).
+  process.stdin.on("end", () => shutdown("stdin_closed"));
+  process.stdin.on("close", () => shutdown("stdin_closed"));
 }
 
 /**
