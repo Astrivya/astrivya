@@ -5,7 +5,6 @@ export { AgentParser } from "./agent-parser";
 export { CodeChunker, SKIP_DIRS, CODE_EXTENSIONS, isIndexableFileName } from "./code-chunker";
 export { TodoParser } from "./todo-parser";
 export { AkgEmbedder } from "./embedder";
-export type { AkgEmbedderOptions, EmbedderStrategy } from "./embedder";
 export { AkgIndexer } from "./indexer";
 export type { IndexWorkspaceOptions } from "./indexer";
 export { Watcher } from "./watcher";
