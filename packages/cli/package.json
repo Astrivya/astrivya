@@ -11,11 +11,7 @@
     },
     "./package.json": "./package.json"
   },
-  "files": [
-    "dist/",
-    "atlas/",
-    "README.md"
-  ],
+  "files": ["dist/", "atlas/", "README.md"],
   "engines": {
     "node": ">=20"
   },
@@ -59,12 +55,7 @@
     "typescript": "^5.0.0",
     "vitest": "^4.1.8"
   },
-  "keywords": [
-    "cli",
-    "knowledge-graph",
-    "local-first",
-    "astrivya"
-  ],
+  "keywords": ["cli", "knowledge-graph", "local-first", "astrivya"],
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
