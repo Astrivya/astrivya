@@ -66,6 +66,41 @@ export function registerAtlas(program: Command): void {
         }
 
         // API Endpoints
+        if (pathname === "/api/mcp/status" || pathname === "/api/mcp/journal") {
+          const mcpBase = (process.env.ASTRIVYA_MCP_URL || "http://localhost:3001").replace(/\/+$/, "");
+          const upstream = pathname === "/api/mcp/status" ? "/status" : `/journal${url.search || ""}`;
+          void (async () => {
+            try {
+              const upstreamRes = await fetch(`${mcpBase}${upstream}`, {
+                headers: { Accept: "application/json" },
+                signal: AbortSignal.timeout(2500),
+              });
+              if (!upstreamRes.ok) {
+                res.writeHead(502, { "Content-Type": "application/json" });
+                res.end(
+                  JSON.stringify({
+                    error: `MCP server unreachable at ${mcpBase} (HTTP ${upstreamRes.status})`,
+                    hint: "Start it with: astrivya mcp-server --http --port 3001",
+                  }),
+                );
+                return;
+              }
+              const body = await upstreamRes.text();
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(body);
+            } catch {
+              res.writeHead(502, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({
+                  error: `MCP server unreachable at ${mcpBase}`,
+                  hint: "Start it with: astrivya mcp-server --http --port 3001",
+                }),
+              );
+            }
+          })();
+          return;
+        }
+
         if (pathname.startsWith("/api/akg/")) {
           res.setHeader("Content-Type", "application/json");
 
@@ -452,7 +487,7 @@ export function registerAtlas(program: Command): void {
 // PCA projection of high-dim vectors to 2D via power iteration on the
 // covariance operator (X^T X v). Avoids materializing the d×d covariance
 // matrix, so it is fine for a few thousand 384-dim vectors.
-function pca2(vectors: number[][]): number[][] {
+export function pca2(vectors: number[][]): number[][] {
   const n = vectors.length;
   const d = vectors[0].length;
   const mean = new Array(d).fill(0);
@@ -462,7 +497,8 @@ function pca2(vectors: number[][]): number[][] {
   const normalize = (v: number[]): number[] => {
     let norm = 0;
     for (const x of v) norm += x * x;
-    norm = Math.sqrt(norm) || 1;
+    norm = Math.sqrt(norm);
+    if (!Number.isFinite(norm) || norm === 0) return new Array(v.length).fill(0);
     return v.map((x) => x / norm);
   };
 
@@ -482,7 +518,7 @@ function pca2(vectors: number[][]): number[][] {
 
   const pc1 = powerIteration(
     centered,
-    centered.map(() => 1),
+    new Array(d).fill(1),
   );
   const project = (row: number[], pc: number[]): number => {
     let dot = 0;
@@ -498,7 +534,7 @@ function pca2(vectors: number[][]): number[][] {
   });
   const pc2 = powerIteration(
     residual,
-    residual.map((_, i) => (i % 2 === 0 ? 1 : -1)),
+    Array.from({ length: d }, (_, i) => (i % 2 === 0 ? 1 : -1)),
   );
   const y = residual.map((row) => project(row, pc2));
 

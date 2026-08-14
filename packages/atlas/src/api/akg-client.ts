@@ -65,6 +65,22 @@ export interface TopoSortResult {
   cycleNodeIds: string[];
 }
 
+export interface EmbedPoint {
+  x: number;
+  y: number;
+  chunkId: string;
+  file: string;
+  nodeId: string | null;
+  community: number | null;
+  preview: string;
+}
+
+export interface EmbedMapResponse {
+  points: EmbedPoint[];
+  count: number;
+  note?: string;
+}
+
 // Base URL for API calls.
 // In production (astrivya atlas CLI on port 4200): same-origin, use relative path.
 // In dev (vite on port 5173): point to the CLI atlas server.
@@ -118,6 +134,11 @@ export const akgClient = {
 
   async getTopo(): Promise<TopoSortResult> {
     const res = await apiFetch("/topo");
+    return res.json();
+  },
+
+  async getEmbedMap(): Promise<EmbedMapResponse> {
+    const res = await apiFetch("/embedmap");
     return res.json();
   },
 };

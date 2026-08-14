@@ -188,6 +188,108 @@ export function registerAkg(program: Command): void {
     });
 
   akg
+    .command("org")
+    .description("Show the identity hierarchy: user → workspace → repos → contributors + inter-repo relations")
+    .action(async () => {
+      try {
+        const storage = new AkgStorage();
+        await storage.init(process.cwd());
+
+        const persons = storage.listPersons();
+        const repos = storage.listRepos();
+        const edges = storage.runQuery(
+          "SELECT source, target, relation, weight FROM edges WHERE relation IN ('contributes_to', 'works_in', 'contains', 'depends_on') ORDER BY relation, source;",
+        );
+
+        const primary = persons.find((p) => p.isPrimary);
+        const others = persons.filter((p) => !p.isPrimary);
+        const edgeMap = new Map<string, { target: string; relation: string; weight: number }[]>();
+        const inboundMap = new Map<string, { source: string; relation: string; weight: number }[]>();
+        for (const e of edges) {
+          const out = edgeMap.get(e.source) ?? [];
+          out.push({ target: e.target, relation: e.relation, weight: e.weight ?? 1 });
+          edgeMap.set(e.source, out);
+          const inn = inboundMap.get(e.target) ?? [];
+          inn.push({ source: e.source, relation: e.relation, weight: e.weight ?? 1 });
+          inboundMap.set(e.target, inn);
+        }
+
+        const repoName = (id: string): string => id.replace(/^repo::/, "");
+        const personName = (id: string): string => {
+          const p = persons.find((x) => x.id === id);
+          return p ? `${p.name}${p.role === "owner" ? " (owner)" : ""}` : id;
+        };
+
+        console.log(`\n${color.bold("Astrivya Knowledge Graph — Identity Hierarchy")}\n`);
+
+        // 1. Primary user on top.
+        if (primary) {
+          console.log(
+            `  ${color.cyan("👤")} ${color.bold(primary.name)}  ${color.dim(`(${primary.email ?? "no email"} · owner · primary`)}`,
+          );
+          for (const e of edgeMap.get(primary.id) ?? []) {
+            if (e.relation === "works_in")
+              console.log(`    └─ ${color.dim("works_in")} ${color.bold("workspace::root")}`);
+            if (e.relation === "contributes_to" && e.target === "workspace::root") {
+              console.log(
+                `    └─ ${color.dim("contributes_to")} ${color.bold("workspace::root")} ${color.dim(`(${e.weight} commits)`)}`,
+              );
+            }
+          }
+        } else {
+          console.log(`  ${color.dim("No primary user detected (git config user.name/user.email missing).")}`);
+        }
+
+        // 2. Workspace → repos.
+        const workspaceLabel = path.basename(process.cwd());
+        console.log(
+          `\n  ${color.cyan("🗂️")} ${color.bold("workspace::root")} ${color.dim(`(${workspaceLabel} · ${repos.length} repo(s), ${persons.length} person(s))`)}`,
+        );
+        for (const repo of repos) {
+          const meta = repo.metadata as {
+            remoteUrl?: string | null;
+            branch?: string | null;
+            packageName?: string | null;
+          };
+          const remote = meta.remoteUrl ? color.dim(meta.remoteUrl) : "";
+          const branch = meta.branch ? color.dim(`@${meta.branch}`) : "";
+          console.log(`    ├─ ${color.cyan("📦")} ${color.bold(repo.label)} ${branch} ${remote}`);
+          for (const e of edgeMap.get(repo.id) ?? []) {
+            if (e.relation === "depends_on") {
+              console.log(`    │    ${color.dim("depends_on")} → ${color.bold(repoName(e.target))}`);
+            }
+          }
+          for (const e of inboundMap.get(repo.id) ?? []) {
+            if (e.relation === "contributes_to") {
+              const p = personName(e.source);
+              const role = e.source === primary?.id ? " · owner" : "";
+              console.log(`    │    ${color.dim("contributes_to")} ${p}${role} ${color.dim(`(${e.weight} commits)`)}`);
+            }
+          }
+        }
+
+        // 3. Members/contributors without a repo link (still part of the org).
+        const linked = new Set<string>();
+        for (const e of edges)
+          if (e.relation === "contributes_to" && e.source.startsWith("person::")) linked.add(e.source);
+        const unlinked = others.filter((p) => !linked.has(p.id));
+        if (unlinked.length > 0) {
+          console.log(`\n  ${color.dim("Members (no direct repo commits in this workspace):")}`);
+          for (const p of unlinked.slice(0, 10)) {
+            console.log(`    • ${color.bold(p.name)} ${color.dim(p.role === "member" ? "(member)" : "")}`);
+          }
+          if (unlinked.length > 10) console.log(`    ... and ${unlinked.length - 10} more`);
+        }
+
+        console.log();
+      } catch (err: unknown) {
+        error(`Failed to read AKG org: ${getErrorMessage(err)}`);
+        process.exitCode = 1;
+        return;
+      }
+    });
+
+  akg
     .command("query <question>")
     .description("Run the hybrid retrieval pipeline against the AKG")
     .action(async (question) => {

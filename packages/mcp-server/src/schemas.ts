@@ -131,7 +131,7 @@ export const CORE_TOOL_DEFINITIONS = [
   {
     name: "get_mcp_status",
     description:
-      "Retrieve the MCP server's own status — uptime, session count, tool call counters, and recent activity journal.",
+      "Retrieve the MCP server's own status — uptime, live session registry (per-session id, client, tool counts, last tool), per-tool latency p50/p95, and recent activity journal.",
     inputSchema: { type: "object", properties: {} },
   },
   {

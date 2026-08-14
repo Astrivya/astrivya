@@ -10,10 +10,12 @@ import {
   Layers,
   Maximize2,
   Minus,
+  Orbit,
   Plus,
   RefreshCw,
   Search,
   Star,
+  Users,
   X,
   ZoomIn,
 } from "lucide-react";
@@ -21,6 +23,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   type AkgNode,
   type AkgStats,
+  type EmbedPoint,
   type GraphData,
   type ImpactReport,
   type PathResult,
@@ -60,11 +63,18 @@ function App() {
   const [neighbors, setNeighbors] = useState<{ node: AkgNode; relation: string; direction: "in" | "out" }[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [suggestions, setSuggestions] = useState<AkgNode[]>([]);
-  const [visualMode, setVisualMode] = useState<"explore" | "focus" | "impact" | "path" | "topo">("explore");
+  const [visualMode, setVisualMode] = useState<"explore" | "focus" | "impact" | "path" | "topo" | "embed">("explore");
 
   // Drawers
   const [layersOpen, setLayersOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+
+  // MCP Sessions drawer
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [mcpSessions, setMcpSessions] = useState<McpSessionInfo[] | null>(null);
+  const [mcpToolStats, setMcpToolStats] = useState<Record<string, McpToolStat> | null>(null);
+  const [mcpLiveSummary, setMcpLiveSummary] = useState<{ version: string; mode: string; uptimeMs: number; sessions: number; activeSessions: number; toolCalls: number; toolErrors: number } | null>(null);
+  const [mcpError, setMcpError] = useState<string | null>(null);
 
   // Mode Action Results
   const [impactReport, setImpactReport] = useState<ImpactReport | null>(null);
@@ -72,6 +82,8 @@ function App() {
   const [pathResult, setPathResult] = useState<PathResult | null>(null);
   const [isPathSelecting, setIsPathSelecting] = useState(false);
   const [topoResult, setTopoResult] = useState<TopoSortResult | null>(null);
+  const [embedMap, setEmbedMap] = useState<EmbedPoint[] | null>(null);
+  const [embedNote, setEmbedNote] = useState<string | null>(null);
 
   // Performance state
   const [fps, setFps] = useState(60);
@@ -91,6 +103,7 @@ function App() {
   const triggerImpactModeRef = useRef<(id: string) => void>(() => {});
   const triggerPathTraceRef = useRef<(from: string, to: string) => void>(() => {});
   const triggerTopoModeRef = useRef<() => void>(() => {});
+  const triggerEmbedModeRef = useRef<() => void>(() => {});
 
   handleNodeSelectionRef.current = handleNodeSelection;
   handleToggleLayerRef.current = handleToggleLayer;
@@ -99,6 +112,48 @@ function App() {
   triggerImpactModeRef.current = triggerImpactMode;
   triggerPathTraceRef.current = triggerPathTrace;
   triggerTopoModeRef.current = triggerTopoMode;
+  triggerEmbedModeRef.current = triggerEmbedMode;
+
+  // Poll the MCP server registry every 3s while the Sessions drawer is open.
+  useEffect(() => {
+    if (!sessionsOpen) return;
+    let disposed = false;
+    async function poll() {
+      try {
+        const res = await fetch("/api/mcp/status");
+        const data = await res.json();
+        if (disposed) return;
+        if (!res.ok || data.error) {
+          setMcpError(data.error || `MCP probe failed (HTTP ${res.status})`);
+          setMcpSessions(null);
+          return;
+        }
+        setMcpError(null);
+        setMcpSessions(data.sessionsList ?? []);
+        setMcpToolStats(data.tools ?? {});
+        setMcpLiveSummary({
+          version: data.version ?? "?",
+          mode: data.mode ?? "?",
+          uptimeMs: Number(data.uptimeMs ?? 0),
+          sessions: Number(data.sessions ?? 0),
+          activeSessions: Number(data.activeSessions ?? 0),
+          toolCalls: Number(data.toolCalls ?? 0),
+          toolErrors: Number(data.toolErrors ?? 0),
+        });
+      } catch {
+        if (!disposed) {
+          setMcpError("MCP server unreachable");
+          setMcpSessions(null);
+        }
+      }
+    }
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [sessionsOpen]);
 
   // Initialize data + renderer once
   useEffect(() => {
@@ -229,6 +284,8 @@ function App() {
         setPathResult(null);
         setImpactReport(null);
         setTopoResult(null);
+        setEmbedMap(null);
+        setVisualMode("explore");
         rendererRef.current?.setSelection(null);
       }
     };
@@ -302,6 +359,8 @@ function App() {
     setPathResult(null);
     setIsPathSelecting(false);
     setTopoResult(null);
+    setEmbedMap(null);
+    setEmbedNote(null);
 
     if (layoutRef.current && rendererRef.current) {
       layoutRef.current.applyDefaultLayout();
@@ -378,8 +437,21 @@ function App() {
     }
   }
 
+  async function triggerEmbedMode() {
+    setVisualMode("embed");
+    setEmbedMap(null);
+    try {
+      const res = await akgClient.getEmbedMap();
+      setEmbedMap(res.points);
+      setEmbedNote(res.note ?? null);
+    } catch (err) {
+      console.error(err);
+      setEmbedNote("Embeddings unavailable — run `astrivya akg init` first.");
+    }
+  }
+
   // Clean up old path/impact state when switching back to explore
-  const handleModeBtn = (mode: "explore" | "focus" | "impact" | "path" | "topo") => {
+  const handleModeBtn = (mode: "explore" | "focus" | "impact" | "path" | "topo" | "embed") => {
     if (mode === "explore") {
       resetToExploreRef.current();
     } else if (mode === "focus" && selectedNode) {
@@ -388,6 +460,8 @@ function App() {
       triggerImpactModeRef.current(selectedNode.id);
     } else if (mode === "topo") {
       triggerTopoModeRef.current();
+    } else if (mode === "embed") {
+      triggerEmbedModeRef.current();
     }
   };
 
@@ -429,6 +503,9 @@ function App() {
       </button>
       <button className={`mode-chip ${visualMode === "topo" ? "active" : ""}`} onClick={() => handleModeBtn("topo")}>
         <Layers size={13} /> Topo
+      </button>
+      <button className={`mode-chip ${visualMode === "embed" ? "active" : ""}`} onClick={() => handleModeBtn("embed")}>
+        <Orbit size={13} /> Embed
       </button>
     </div>
   );
@@ -685,6 +762,13 @@ function App() {
             <Layers size={16} />
           </button>
           <button
+            className={`icon-btn ${sessionsOpen ? "active" : ""}`}
+            onClick={() => setSessionsOpen((v) => !v)}
+            title="MCP Sessions — live registry of connected AI agents"
+          >
+            <Users size={16} />
+          </button>
+          <button
             className={`icon-btn ${inspectorOpen ? "active" : ""}`}
             onClick={() => setInspectorOpen((v) => !v)}
             title="Inspector"
@@ -712,6 +796,9 @@ function App() {
         )}
 
         <MiniMap layoutRef={layoutRef} rendererRef={rendererRef} selectedNodeId={selectedNode?.id} />
+        {visualMode === "embed" && (
+          <EmbedMap points={embedMap ?? []} note={embedNote} onSelectNode={(id) => handleNodeSelection(id)} />
+        )}
         {hud}
         {modePill}
         {zoomControls}
@@ -719,6 +806,15 @@ function App() {
 
       {layersPanel}
       {inspectorPanel}
+      {sessionsOpen && (
+        <SessionsPanel
+          summary={mcpLiveSummary}
+          sessions={mcpSessions}
+          toolStats={mcpToolStats}
+          error={mcpError}
+          onClose={() => setSessionsOpen(false)}
+        />
+      )}
 
       <footer className="atlas-status-bar">
         <div className="status-indicator">
@@ -836,6 +932,270 @@ const MiniMap = memo(function MiniMap({
   return (
     <div className="minimap-overlay">
       <canvas ref={mapCanvasRef} width={132} height={96} />
+    </div>
+  );
+});
+
+// EmbedMap — PCA 2D projection of chunk embeddings ("semantic terrain").
+// Dots colored by community; hover shows the chunk file + preview; click
+// flies to the owning node in the main graph.
+const EmbedMap = memo(function EmbedMap({
+  points,
+  note,
+  onSelectNode,
+}: {
+  points: EmbedPoint[];
+  note: string | null;
+  onSelectNode: (nodeId: string) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [hovered, setHovered] = useState<EmbedPoint | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const parent = canvas?.parentElement;
+    if (!canvas || !parent) return;
+    canvas.width = parent.clientWidth;
+    canvas.height = parent.clientHeight;
+    setSize({ w: parent.clientWidth, h: parent.clientHeight });
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || size.w === 0) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#0e0f14";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const pad = 24;
+    const dot = 2.2;
+    for (const p of points) {
+      ctx.fillStyle =
+        p.community !== null && p.community !== undefined
+          ? `hsl(${(p.community * 137) % 360}, 65%, 62%)`
+          : "#565666";
+      ctx.beginPath();
+      ctx.arc(pad + p.x * (canvas.width - pad * 2), pad + p.y * (canvas.height - pad * 2), dot, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#8a8a96";
+    ctx.font = "11px system-ui, sans-serif";
+    const suffix = points.length > 0 ? ` · PCA projection of ${points.length} chunk embeddings` : "";
+    ctx.fillText(`semantic terrain${suffix}`, 12, canvas.height - 8);
+  }, [points, size]);
+
+  const pick = (e: React.MouseEvent): EmbedPoint | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const pad = 24;
+    let best: EmbedPoint | null = null;
+    let bestDist = 14;
+    for (const p of points) {
+      const dx = pad + p.x * (canvas.width - pad * 2) - mx;
+      const dy = pad + p.y * (canvas.height - pad * 2) - my;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = p;
+      }
+    }
+    return best;
+  };
+
+  const onMove = (e: React.MouseEvent) => setHovered(pick(e));
+  const onLeave = () => setHovered(null);
+  const onClick = (e: React.MouseEvent) => {
+    const p = pick(e);
+    if (p?.nodeId) onSelectNode(p.nodeId);
+  };
+
+  return (
+    <div className="embedmap-overlay">
+      <canvas ref={canvasRef} onMouseMove={onMove} onMouseLeave={onLeave} onClick={onClick} />
+      {hovered && (
+        <div className="embedmap-tooltip" style={{ top: "12px", left: "12px" }}>
+          <div className="embedmap-file">{hovered.file}</div>
+          <div className="embedmap-preview">{hovered.preview}</div>
+          {hovered.community !== null && hovered.community !== undefined && (
+            <div className="embedmap-meta">community {hovered.community}</div>
+          )}
+        </div>
+      )}
+      {note && <div className="embedmap-note">{note}</div>}
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
+// MCP Sessions panel — live registry of connected AI agents, proxied from the
+// MCP HTTP server's /status endpoint (see cli/src/commands/atlas.ts).
+// ---------------------------------------------------------------------------
+
+interface McpSessionInfo {
+  id: string;
+  client: string | null;
+  mode: string;
+  startedAt: number;
+  lastActiveAt: number;
+  toolCalls: number;
+  tools: Record<string, number>;
+  lastTool: string | null;
+  lastToolAt: number | null;
+  endedAt: number | null;
+}
+
+interface McpToolStat {
+  count: number;
+  errors: number;
+  lastMs: number | null;
+  p50Ms: number | null;
+  p95Ms: number | null;
+}
+
+interface SessionsPanelProps {
+  summary: {
+    version: string;
+    mode: string;
+    uptimeMs: number;
+    sessions: number;
+    activeSessions: number;
+    toolCalls: number;
+    toolErrors: number;
+  } | null;
+  sessions: McpSessionInfo[] | null;
+  toolStats: Record<string, McpToolStat> | null;
+  error: string | null;
+  onClose: () => void;
+}
+
+function fmtUptime(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+function shortSid(id: string): string {
+  return id.length <= 8 ? id : `${id.slice(0, 8)}\u2026`;
+}
+
+const SessionsPanel = memo(function SessionsPanel({ summary, sessions, toolStats, error, onClose }: SessionsPanelProps) {
+  const active = (sessions ?? []).filter((s) => !s.endedAt);
+  const ended = (sessions ?? []).filter((s) => s.endedAt);
+
+  return (
+    <div className="sessions-panel">
+      <div className="sessions-panel-header">
+        <span className="sessions-panel-title">
+          <Users size={14} /> MCP Sessions
+        </span>
+        <button className="sessions-panel-close" onClick={onClose} title="Close">
+          <X size={14} />
+        </button>
+      </div>
+
+      {error ? (
+        <div className="sessions-error">
+          <strong>{error}</strong>
+          <p>Atlas proxies the MCP server's live registry. Start an HTTP server so agents appear here:</p>
+          <code>astrivya mcp-server --http --port 3001</code>
+          <p className="sessions-error-hint">
+            (or point <code>ASTRIVYA_MCP_URL</code> at the right endpoint, e.g.{" "}
+            <code>http://localhost:3001</code>)
+          </p>
+        </div>
+      ) : summary ? (
+        <div className="sessions-summary">
+          <span>
+            <strong>{summary.activeSessions}</strong> active / <strong>{summary.sessions}</strong> total
+          </span>
+          <span>
+            {summary.toolCalls.toLocaleString()} tool calls
+            {summary.toolErrors > 0 ? ` · ${summary.toolErrors} errors` : ""}
+          </span>
+          <span>
+            v{summary.version} · {summary.mode} · up {fmtUptime(summary.uptimeMs)}
+          </span>
+        </div>
+      ) : (
+        <div className="sessions-summary">
+          <span className="sessions-loading">probing MCP server\u2026</span>
+        </div>
+      )}
+
+      {!error && sessions && sessions.length === 0 && (
+        <div className="sessions-empty">No sessions yet — connect an AI agent to see it here.</div>
+      )}
+
+      {active.length > 0 && (
+        <div className="sessions-section">
+          <div className="sessions-section-label">Active</div>
+          {active.map((s) => (
+            <div className="session-card active" key={s.id}>
+              <div className="session-card-row">
+                <span className="session-dot" />
+                <span className="session-id">{shortSid(s.id)}</span>
+                <span className="session-client">{s.client || "unknown client"}</span>
+                <span className="session-uptime">{fmtUptime(Date.now() - s.startedAt)}</span>
+              </div>
+              <div className="session-card-row">
+                <span className="session-meta">
+                  {s.toolCalls} calls · {s.mode}
+                </span>
+                <span className="session-last-tool">{s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {ended.length > 0 && (
+        <div className="sessions-section">
+          <div className="sessions-section-label">Recently ended</div>
+          {ended.slice(0, 5).map((s) => (
+            <div className="session-card ended" key={s.id}>
+              <div className="session-card-row">
+                <span className="session-id">{shortSid(s.id)}</span>
+                <span className="session-client">{s.client || "unknown client"}</span>
+                <span className="session-uptime">{fmtUptime((s.endedAt ?? s.lastActiveAt) - s.startedAt)}</span>
+              </div>
+              <div className="session-card-row">
+                <span className="session-meta">{s.toolCalls} calls · ended</span>
+                <span className="session-last-tool">{s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {toolStats && Object.keys(toolStats).length > 0 && (
+        <div className="sessions-section">
+          <div className="sessions-section-label">Per-tool latency</div>
+          <div className="session-tools">
+            {Object.entries(toolStats)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([name, t]) => (
+                <div className="session-tool-row" key={name}>
+                  <span className="session-tool-name">{name}</span>
+                  <span className="session-tool-calls">
+                    {t.count} call{t.count === 1 ? "" : "s"}
+                    {t.errors > 0 ? ` · ${t.errors} err` : ""}
+                  </span>
+                  <span className="session-tool-lat">
+                    {t.p50Ms != null ? `p50 ${t.p50Ms}ms` : ""}
+                    {t.p95Ms != null ? ` · p95 ${t.p95Ms}ms` : ""}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 });

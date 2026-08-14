@@ -243,6 +243,10 @@ function buildDigestPayload(limit: number): {
     recent: topLabels,
     action_items: actions,
     counts: { nodes: stats.nodes, chunks: stats.chunks, embeddings: stats.embeddings },
+    mcp: (() => {
+      const s = getStatus();
+      return { active_sessions: s.activeSessions, total_sessions: s.sessions };
+    })(),
   };
 
   // ~4 chars/token rough cap; the digest is intentionally compact (R1: <1.5k tokens).
@@ -338,7 +342,25 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
   search_memories: async (args) => {
     const q = args?.query || "";
     const limit = args?.limit || 8;
-    const results = await getQuery().retrieve(q, limit);
+    let results = await getQuery().retrieve(q, limit);
+
+    // active_file boost: results from (or under) the caller's active file are
+    // promoted above equal-scoring matches from elsewhere in the workspace.
+    const activeFile: string | undefined = args?.active_file || args?.activeFile;
+    let boostNote: string | undefined;
+    if (activeFile && results.length > 1) {
+      const target = path.normalize(activeFile).toLowerCase();
+      const boosted = results.map((r: any) => {
+        const fp = typeof r.filePath === "string" ? path.normalize(r.filePath).toLowerCase() : "";
+        const isMatch = fp === target || fp.endsWith(`/${target}`) || fp.endsWith(`\\${target}`) || fp.includes(target);
+        return { r, b: isMatch ? 0.25 : 0 };
+      });
+      if (boosted.some((x) => x.b > 0)) {
+        boosted.sort((a, b) => b.r.score + b.b - (a.r.score + a.b));
+        results = boosted.map((x) => x.r);
+        boostNote = `Boosted results from ${activeFile}`;
+      }
+    }
 
     let cloudNodes: any[] = [];
     let source: "local" | "cloud" = "local";
@@ -369,6 +391,7 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
       note =
         "Local knowledge graph is empty or the semantic embedder is unavailable — results are keyword (FTS) matches only. Run `astrivya akg init --index` to index files.";
     }
+    if (boostNote) note = note ? `${note} — ${boostNote}` : boostNote;
 
     return envelope({ results: merged }, { source, note, quality: semanticAvailable ? "high" : "low" });
   },
@@ -378,8 +401,13 @@ const LOCAL_HANDLERS: Record<string, (args: any) => Promise<ToolResult>> = {
     const s = getStorage();
     const stats = s.getStats();
     const journal = readJournal(workspacePath, 20);
+    const semanticAvailable = await getQuery().semanticAvailable();
     return envelope(
-      { ...status, akg: { nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks }, recentEvents: journal },
+      {
+        ...status,
+        akg: { nodes: stats.nodes, edges: stats.edges, chunks: stats.chunks, semanticAvailable },
+        recentEvents: journal,
+      },
       { note: "MCP server health snapshot", quality: "high" },
     );
   },
