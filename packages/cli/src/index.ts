@@ -26,6 +26,7 @@ import { getToken, setVerbose } from "./lib/compat";
 import { runRootAction } from "./lib/entry-guard";
 import { color, getErrorMessage, setPrintMode } from "./lib/output";
 import { loadCommandPlugins } from "./lib/plugin";
+import { beginCommandTelemetry, endCommandTelemetry, maybePrintTelemetryBanner } from "./lib/telemetry";
 import { CURRENT_VERSION } from "./lib/version";
 
 async function main() {
@@ -61,6 +62,22 @@ Tips:
       if (opts.verbose) setVerbose(true);
       if (opts.print) setPrintMode(true);
     })
+    .hook("preAction", (thisCommand: Command, actionCommand: Command) => {
+      // Anonymous usage telemetry (opt-out, see src/lib/telemetry.ts).
+      // Root-level hooks receive the root program as the first arg; the
+      // command actually being executed is passed as `actionCommand`. A bare
+      // `astrivya` (TUI) executes the root itself — skip that.
+      if (actionCommand && actionCommand !== thisCommand) {
+        const parts: string[] = [];
+        let cmd: Command | null = actionCommand;
+        while (cmd && cmd.name() !== "astrivya") {
+          parts.unshift(cmd.name());
+          cmd = cmd.parent;
+        }
+        maybePrintTelemetryBanner(parts[0] === "config");
+        beginCommandTelemetry(parts.join(" "));
+      }
+    })
     .hook("preAction", async (thisCommand: Command) => {
       const opts = thisCommand.optsWithGlobals();
       const name = thisCommand.name();
@@ -71,6 +88,7 @@ Tips:
     .hook("postAction", async (thisCommand: Command) => {
       const opts = thisCommand.optsWithGlobals();
       await maybeSyncPlugins({ local: opts.local === true, force: consumeCascadeSyncFlag() });
+      endCommandTelemetry("ok");
     })
     .action(() => {
       runRootAction(program, startTui);
@@ -138,6 +156,7 @@ Tips:
 
 main().catch((err) => {
   console.error(`${color.red("Fatal error:")}`, getErrorMessage(err));
+  endCommandTelemetry("error", err instanceof Error ? err.name : "UnknownError");
   process.exitCode = 1;
   return;
 });

@@ -8,7 +8,7 @@ import {
   GraphTraversal,
   ImpactAnalyzer,
 } from "@astrivya/akg-core";
-import { AkgEmbedder, AkgIndexer } from "@astrivya/akg-indexer";
+import { AkgEmbedder, AkgIndexer, buildIdentityGraph } from "@astrivya/akg-indexer";
 import type { Command } from "commander";
 import envPaths from "env-paths";
 import { getBaseUrl, getOrgId, getToken } from "../lib/compat";
@@ -120,6 +120,16 @@ export function registerAkg(program: Command): void {
           parallel: options.parallel !== false,
         });
 
+        const identity = buildIdentityGraph(storage, targetPath);
+        storage.saveToDisk(); // flush: indexer left a debounced (unref'd) auto-save timer
+        if (identity.repos > 0 || identity.persons > 0) {
+          console.log(
+            color.dim(
+              `  Identity: ${identity.repos} repo(s), ${identity.persons} person(s), ${identity.personEdges + identity.repoEdges} relation(s)`,
+            ),
+          );
+        }
+
         let embResult: { embedded: number; total: number; failed: number } | null = null;
         if (options.embed !== false) {
           embResult = await embedChunks(storage, (done, total) => renderer.embed(done, total));
@@ -138,7 +148,8 @@ export function registerAkg(program: Command): void {
         }
       } catch (err: unknown) {
         renderer.fail(getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -171,7 +182,8 @@ export function registerAkg(program: Command): void {
         }
       } catch (err: unknown) {
         error(`Failed to read AKG status: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -210,7 +222,8 @@ export function registerAkg(program: Command): void {
         }
       } catch (err: unknown) {
         error(`Failed to execute AKG query: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -232,6 +245,16 @@ export function registerAkg(program: Command): void {
           parallel: options.parallel !== false,
         });
 
+        const identity = buildIdentityGraph(storage, targetPath);
+        storage.saveToDisk(); // flush: indexer left a debounced (unref'd) auto-save timer
+        if (identity.repos > 0 || identity.persons > 0) {
+          console.log(
+            color.dim(
+              `  Identity: ${identity.repos} repo(s), ${identity.persons} person(s), ${identity.personEdges + identity.repoEdges} relation(s)`,
+            ),
+          );
+        }
+
         let embResult: { embedded: number; total: number; failed: number } | null = null;
         if (options.embed !== false) {
           embResult = await embedChunks(storage, (done, total) => renderer.embed(done, total));
@@ -250,7 +273,8 @@ export function registerAkg(program: Command): void {
         }
       } catch (err: unknown) {
         renderer.fail(getErrorMessage(err));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -270,7 +294,8 @@ export function registerAkg(program: Command): void {
 
         if (!report) {
           error(`File "${filePath}" (node ID: "${fileNodeId}") not found in index. Run "astrivya akg init" first.`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         console.log(`\n${color.bold("AKG Change Impact Analysis")}\n`);
@@ -315,7 +340,8 @@ export function registerAkg(program: Command): void {
         }
       } catch (err: unknown) {
         error(`Failed to analyze impact: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -365,7 +391,8 @@ export function registerAkg(program: Command): void {
         console.log();
       } catch (err: unknown) {
         error(`Failed to trace path: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -382,7 +409,8 @@ export function registerAkg(program: Command): void {
         success(`Exported AKG to ${outPath} (${graph.nodes.length} nodes, ${graph.edges.length} edges)`);
       } catch (err: unknown) {
         error(`Failed to export AKG: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 
@@ -394,7 +422,8 @@ export function registerAkg(program: Command): void {
         const resolvedPath = path.resolve(inputFile);
         if (!fs.existsSync(resolvedPath)) {
           error(`File not found: ${inputFile}`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         const raw = fs.readFileSync(resolvedPath, "utf-8");
         const data = JSON.parse(raw);
@@ -404,7 +433,8 @@ export function registerAkg(program: Command): void {
         success(`Imported from ${inputFile}: ${result.merged} merged, ${result.conflicts} conflicts`);
       } catch (err: unknown) {
         error(`Failed to import AKG: ${getErrorMessage(err)}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     });
 }

@@ -33,6 +33,8 @@ export interface AppConfig {
   role?: string;
   teamName?: string;
   autoUpdate?: "on" | "prompt" | "off";
+  /** Anonymous usage telemetry (opt-out; see src/lib/telemetry.ts). */
+  telemetry?: "on" | "off";
 }
 
 let _configCache: AppConfig | null = null;

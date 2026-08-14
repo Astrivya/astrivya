@@ -1,5 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+  telemetryServerStart,
+  telemetryServerStop,
+  telemetrySessionEnd,
+  telemetrySessionStart,
+  telemetrySetTransport,
+  telemetryToolCall,
+} from "./telemetry";
 
 /**
  * Lightweight MCP server status tracker.
@@ -52,6 +60,8 @@ export function initStatus(opts: { workspace: string; mode: "stdio" | "http"; ve
   _startedAt = Date.now();
   _journalDir = path.join(opts.workspace, ".astrivya", "mcp");
   appendEvent("server_start", { mode: opts.mode, version: opts.version, pid: process.pid });
+  telemetrySetTransport(opts.mode);
+  telemetryServerStart(opts.version);
 }
 
 /** Record a client session being established (initialize handshake). */
@@ -59,12 +69,14 @@ export function recordSessionStart(): void {
   _sessions++;
   _activeSessions++;
   appendEvent("session_start", { session: _sessions, pid: process.pid });
+  telemetrySessionStart({ sessionId: `stdio:${process.pid}` });
 }
 
 /** Record a client session closing (HTTP DELETE, transport close, or shutdown). */
 export function recordSessionEnd(): void {
   _activeSessions = Math.max(0, _activeSessions - 1);
   appendEvent("session_end", { session: _sessions, pid: process.pid });
+  telemetrySessionEnd({ sessionId: `stdio:${process.pid}`, toolCalls: 0 });
 }
 
 /** Record a tool invocation result. `ok` is false when the tool returned an error. */
@@ -73,11 +85,13 @@ export function recordToolCall(name: string, ok: boolean): void {
   _tools[name] = (_tools[name] || 0) + 1;
   if (!ok) _toolErrors++;
   appendEvent("tool_call", { tool: name, ok });
+  telemetryToolCall({ tool: name, ok });
 }
 
 /** Flush a final `server_stop` event. Best-effort; never throws. */
 export function recordServerStop(reason = "shutdown"): void {
   appendEvent("server_stop", { reason, pid: process.pid, uptimeMs: Date.now() - _startedAt });
+  telemetryServerStop(reason, Date.now() - _startedAt);
 }
 
 /** Append a custom event to the journal (e.g. `auto_index`, `embed_*`). */

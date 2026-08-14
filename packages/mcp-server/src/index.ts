@@ -30,6 +30,7 @@ import {
   recordSessionStart,
   recordToolCall,
 } from "./status";
+import { maybePrintTelemetryBanner } from "./telemetry";
 
 function createServer() {
   const server = new Server(
@@ -218,6 +219,7 @@ async function runStdioServer() {
   const workspacePath = await initAkg();
   refreshContextDigest();
   maybePrintUpdateBanner();
+  maybePrintTelemetryBanner();
 
   initStatus({ workspace: workspacePath, mode: "stdio", version: CURRENT_VERSION });
 
@@ -245,6 +247,7 @@ async function runHttpServer(port: number) {
   const workspacePath = await initAkg();
   refreshContextDigest();
   maybePrintUpdateBanner();
+  maybePrintTelemetryBanner();
 
   initStatus({ workspace: workspacePath, mode: "http", version: CURRENT_VERSION });
 
