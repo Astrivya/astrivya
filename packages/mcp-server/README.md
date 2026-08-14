@@ -1,6 +1,6 @@
 # @astrivya/mcp-server
 
-**Model Context Protocol server** for the Astrivya Knowledge Graph. Provides 18 tools that any MCP-compatible client (Claude Desktop, Cursor, Cline, VS Code with Continue, etc.) can use to read, write, and search your local knowledge graph.
+**Model Context Protocol server** for the Astrivya Knowledge Graph. Provides 21 tools that any MCP-compatible client (Claude Desktop, Cursor, Cline, VS Code with Continue, etc.) can use to read, write, and search your local knowledge graph.
 
 ```sh
 npm install -g @astrivya/mcp-server
@@ -68,6 +68,9 @@ Add to `~/.continue/config.json`:
 | `check_credits` | — | Live credit balance, lifetime usage, recent transactions (cloud; fails gracefully offline) |
 | `get_context_digest` | `limit?` | Compact pre-digested context for session start (prose) |
 | `get_workspace_updates` | `since?`, `limit?` | Knowledge-graph changes since a timestamp (delta) |
+| `identify_agent` | `name?`, `model?`, `provider?`, `session?`, `cwd?`, `project?` | Register this session on the Agent Mesh roster |
+| `agent_message` | `text`, `to?`, `type?`, `thread_id?`, `in_reply_to?`, `context?`, `urgency?` | Send a message to other agents (A2A) |
+| `mesh_read` | `limit?`, `since?`, `agent?`, `type?` | Read the Agent Mesh feed (typed/threaded messages) |
 
 > Cloud-requiring tools gracefully fall back to local AKG stats when the cloud API is unavailable.
 
