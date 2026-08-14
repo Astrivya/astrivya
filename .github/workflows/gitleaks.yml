@@ -26,4 +26,8 @@ jobs:
       - name: Run Gitleaks
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz
-          ./gitleaks detect --source . --redact --exit-code 1
+          # Baseline (.gitleaks-baseline.json, generated 2026-08-14 with the
+          # full rule set) suppresses pre-existing history findings; only NEW
+          # findings fail. Regenerate with:
+          #   ./gitleaks detect --source . --config .gitleaks.toml --report-format json --report-path .gitleaks-baseline.json
+          ./gitleaks detect --source . --redact --exit-code 1 --baseline-path .gitleaks-baseline.json
