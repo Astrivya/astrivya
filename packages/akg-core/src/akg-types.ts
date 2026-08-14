@@ -13,7 +13,8 @@ export type NodeType =
   | "person"
   | "task"
   | "agent"
-  | "agent_action";
+  | "agent_action"
+  | "agent_message";
 
 /** Supported edge relation types between nodes. */
 export type RelationType =

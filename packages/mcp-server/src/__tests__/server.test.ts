@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { AkgStorage } from "@astrivya/akg-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { handleReadResource, handleToolCall, setAkgStorage } from "../handlers";
+import { initStatus } from "../status";
 
 function createTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "mcp-e2e-"));
@@ -32,6 +33,7 @@ describe("MCP server handlers — tools", () => {
     storage = new AkgStorage();
     await storage.init(dir);
     setAkgStorage(storage, dir);
+    initStatus({ workspace: dir, mode: "stdio", version: "test" });
 
     // Seed some initial data
     storage.upsertNode({
@@ -340,5 +342,114 @@ describe("MCP server handlers — resources", () => {
 
   it("throws for unknown resource URI", async () => {
     await expect(handleReadResource("astrivya://unknown/path")).rejects.toThrow("Unsupported resource");
+  });
+});
+
+describe("Agent Mesh tools", () => {
+  let dir: string;
+  let storage: AkgStorage;
+
+  beforeAll(async () => {
+    dir = createTempDir();
+    storage = new AkgStorage();
+    await storage.init(dir);
+    setAkgStorage(storage, dir);
+    initStatus({ workspace: dir, mode: "stdio", version: "test" });
+  });
+
+  afterAll(() => {
+    cleanup(dir);
+  });
+
+  it("registers an agent identity via identify_agent", async () => {
+    const result = await handleToolCall(
+      "identify_agent",
+      { name: "mesh-bot", model: "gpt-5", provider: "opencode", session: "build", project: "astrivya" },
+      { sessionId: "stdio:mesh", clientVersion: "0.5.0" },
+    );
+    expect(result.isError).toBeFalsy();
+    const payload = parseEnvelope(result);
+    expect(payload.data.identity.name).toBe("mesh-bot");
+    expect(payload.data.identity.model).toBe("gpt-5");
+  });
+
+  it("round-trips an agent_message through mesh_read and indexes it into the AKG", async () => {
+    const sent = await handleToolCall(
+      "agent_message",
+      {
+        text: "I'm taking cli.ts:12-40 for the refactor — replying in thread release-1",
+        type: "code-conflict",
+        thread_id: "release-1",
+        context: { files: ["packages/cli/src/commands/mcp.ts"], branch: "main" },
+        urgency: "high",
+      },
+      { sessionId: "stdio:mesh" },
+    );
+    expect(sent.isError).toBeFalsy();
+    const sentPayload = parseEnvelope(sent);
+    expect(sentPayload.data.type).toBe("code-conflict");
+    expect(sentPayload.data.thread_id).toBe("release-1");
+
+    const read = await handleToolCall("mesh_read", {}, { sessionId: "stdio:mesh" });
+    const feed = parseEnvelope(read);
+    expect(feed.data.messages.length).toBe(1);
+    expect(feed.data.messages[0].from).toBe("stdio:mesh");
+    expect(feed.data.messages[0].fromName).toBe("mesh-bot");
+    expect(feed.data.messages[0].text).toContain("cli.ts:12-40");
+    expect(feed.data.messages[0].threadId).toBe("release-1");
+    expect(feed.data.messages[0].type).toBe("code-conflict");
+    expect(feed.data.messages[0].context?.files[0]).toContain("mcp.ts");
+    expect(feed.data.senders).toEqual(["stdio:mesh"]);
+
+    // AKG indexing: node + chunk (searchable via search_memories)
+    const nodeRows = storage.runQuery("SELECT id, type, content FROM nodes WHERE type = 'agent_message'");
+    expect(nodeRows.length).toBe(1);
+    const agentRows = storage.runQuery("SELECT id, type FROM nodes WHERE type = 'agent'");
+    expect(agentRows.length).toBe(1);
+    const chunkRows = storage.runQuery("SELECT node_id FROM chunks WHERE node_id = ?", [nodeRows[0].id]);
+    expect(chunkRows.length).toBe(1);
+    const edgeRows = storage.runQuery(
+      "SELECT source, target, relation FROM edges WHERE relation = 'generated' AND target = ?",
+      [nodeRows[0].id],
+    );
+    expect(edgeRows.length).toBe(1);
+  });
+
+  it("filters mesh_read by type, agent and limit", async () => {
+    await handleToolCall(
+      "agent_message",
+      { text: "second message in thread", thread_id: "release-1" },
+      { sessionId: "stdio:mesh" },
+    );
+
+    const byType = parseEnvelope(
+      await handleToolCall("mesh_read", { type: "code-conflict" }, { sessionId: "stdio:mesh" }),
+    );
+    expect(byType.data.count).toBe(1);
+
+    const byAgent = parseEnvelope(
+      await handleToolCall("mesh_read", { agent: "stdio:other" }, { sessionId: "stdio:mesh" }),
+    );
+    expect(byAgent.data.count).toBe(0);
+
+    const limited = parseEnvelope(await handleToolCall("mesh_read", { limit: 1 }, { sessionId: "stdio:mesh" }));
+    expect(limited.data.messages.length).toBe(1);
+    expect(limited.data.messages[0].text).toBe("second message in thread");
+  });
+
+  it("rejects invalid mesh messages and falls unknown types back to general", async () => {
+    const noText = await handleToolCall("agent_message", {});
+    expect(noText.isError).toBeTruthy();
+
+    const huge = await handleToolCall("agent_message", { text: "x".repeat(8001) });
+    expect(huge.isError).toBeTruthy();
+
+    const fallback = await handleToolCall(
+      "agent_message",
+      { text: "hello", type: "nonsense" },
+      { sessionId: "stdio:mesh" },
+    );
+    expect(fallback.isError).toBeFalsy();
+    expect(parseEnvelope(fallback).data.type).toBe("general");
   });
 });

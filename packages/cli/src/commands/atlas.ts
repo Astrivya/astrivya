@@ -4,8 +4,22 @@ import * as http from "node:http";
 import * as path from "node:path";
 import { AkgStorage, GraphTraversal, ImpactAnalyzer } from "@astrivya/akg-core";
 import { AkgIndexer, Watcher } from "@astrivya/akg-indexer";
+import { readJournal } from "@astrivya/mcp-server";
 import type { Command } from "commander";
 import { color, error, getErrorMessage, info } from "../lib/output";
+import { isPidAlive } from "./mcp";
+
+interface MeshSenderRow {
+  id: string;
+  name: string | null;
+  model: string | null;
+  provider: string | null;
+  session: string | null;
+  cwd: string | null;
+  project: string | null;
+  pid: number | null;
+  lastSeen: string;
+}
 
 export function registerAtlas(program: Command): void {
   program
@@ -98,6 +112,85 @@ export function registerAtlas(program: Command): void {
               );
             }
           })();
+          return;
+        }
+
+        if (pathname === "/api/mcp/mesh") {
+          // Agent Mesh feed — journal-direct (no live MCP server required).
+          // Read the workspace journal, filter agent_message + agent_identify
+          // events, and decorate senders with PID liveness.
+          res.setHeader("Content-Type", "application/json");
+          try {
+            const events = readJournal(workspacePath, 5000);
+            const messages = events
+              .filter((e) => e.type === "agent_message")
+              .map((e) => ({
+                id: String(e.id ?? ""),
+                from: String(e.from ?? e.session_id ?? ""),
+                fromName: (e.from_name as string | null) ?? null,
+                client: e.client ?? null,
+                to: String(e.to ?? "all"),
+                type: String(e.msg_type ?? "general"),
+                text: String(e.text ?? ""),
+                threadId: e.thread_id ?? null,
+                inReplyTo: e.in_reply_to ?? null,
+                context: e.context ?? null,
+                urgency: String(e.urgency ?? "normal"),
+                ts: String(e.ts),
+                pid: typeof e.pid === "number" ? e.pid : null,
+              }));
+            const identityById = new Map<string, MeshSenderRow>();
+            for (const e of events) {
+              if (e.type !== "agent_identify") continue;
+              const sid = String(e.session_id ?? "");
+              if (!sid) continue;
+              const existing = identityById.get(sid);
+              identityById.set(sid, {
+                id: sid,
+                name: (e.name as string | null) ?? existing?.name ?? null,
+                model: (e.model as string | null) ?? existing?.model ?? null,
+                provider: (e.provider as string | null) ?? existing?.provider ?? null,
+                session: (e.session as string | null) ?? existing?.session ?? null,
+                cwd: (e.cwd as string | null) ?? existing?.cwd ?? null,
+                project: (e.project as string | null) ?? existing?.project ?? null,
+                pid: typeof e.pid === "number" ? e.pid : null,
+                lastSeen: String(e.ts),
+              });
+            }
+            for (const m of messages) {
+              if (!identityById.has(m.from) && m.from) {
+                identityById.set(m.from, {
+                  id: m.from,
+                  name: m.fromName,
+                  model: null,
+                  provider: null,
+                  session: null,
+                  cwd: null,
+                  project: null,
+                  pid: m.pid,
+                  lastSeen: m.ts,
+                });
+              }
+            }
+            const senders: Array<MeshSenderRow & { alive: boolean }> = [...identityById.values()].map((s) => ({
+              ...s,
+              alive: isPidAlive(s.pid),
+            }));
+            senders.sort((a, b) => String(b.lastSeen ?? "").localeCompare(String(a.lastSeen ?? "")));
+            messages.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                messages,
+                senders,
+                count: messages.length,
+                activeAgents: senders.filter((s) => s.alive).length,
+              }),
+            );
+          } catch (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: `Mesh read failed: ${getErrorMessage(err)}` }));
+          }
           return;
         }
 

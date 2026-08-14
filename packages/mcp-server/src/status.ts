@@ -27,6 +27,9 @@ import {
 export interface SessionInfo {
   id: string;
   client: string | null;
+  clientVersion: string | null;
+  /** Agent identity (self-registered via `identify_agent`, env-provided, or null). */
+  agent: AgentIdentity | null;
   mode: "stdio" | "http";
   startedAt: number;
   lastActiveAt: number;
@@ -36,6 +39,23 @@ export interface SessionInfo {
   tools: Record<string, number>;
   lastTool: string | null;
   lastToolAt: number | null;
+}
+
+/**
+ * Self-reported agent identity for the Agent Mesh roster. The four layers are
+ * merged, env defaults winning only when the tool does not override them:
+ *  1. clientInfo from the MCP `initialize` handshake (client name/version).
+ *  2. spawn facts (pid, workspace) from the journal.
+ *  3. env config: ASTRIVYA_AGENT_NAME / _MODEL / _PROVIDER / _SESSION.
+ *  4. self-registration via the `identify_agent` tool.
+ */
+export interface AgentIdentity {
+  name: string | null;
+  model: string | null;
+  provider: string | null;
+  session: string | null;
+  cwd: string | null;
+  project: string | null;
 }
 
 export interface ToolStats {
@@ -78,6 +98,8 @@ export interface JournalEvent {
 export interface SessionStartOptions {
   id?: string;
   client?: string | null;
+  clientVersion?: string | null;
+  agent?: AgentIdentity | null;
   mode?: "stdio" | "http";
 }
 
@@ -96,6 +118,53 @@ const MAX_JOURNAL_BYTES = 5 * 1024 * 1024;
 /** Ended sessions kept in the registry before being dropped. */
 const MAX_ENDED_SESSIONS = 40;
 
+/**
+ * Message types in the Agent Mesh A2A taxonomy. Threads about the same topic
+ * share a `thread_id`; types drive Atlas thread styling (coordination types
+ * render with an emphasis color, `code-conflict` and `blocker` in red).
+ */
+export const MESH_MESSAGE_TYPES = [
+  "general",
+  "code-conflict",
+  "release",
+  "tag",
+  "ci",
+  "deploy",
+  "vm",
+  "git-push",
+  "review",
+  "blocker",
+  "question",
+] as const;
+export type MeshMessageType = (typeof MESH_MESSAGE_TYPES)[number];
+
+export const MESH_URGENCIES = ["info", "low", "normal", "high"] as const;
+export type MeshUrgency = (typeof MESH_URGENCIES)[number];
+
+export interface MeshContext {
+  files?: string[];
+  repos?: string[];
+  branch?: string;
+  lineRange?: string;
+  topic?: string;
+}
+
+/** A single agent-to-agent message as surfaced by `mesh_read`. */
+export interface MeshMessage {
+  id: string;
+  from: string;
+  fromName: string | null;
+  client: string | null;
+  to: string;
+  type: string;
+  text: string;
+  threadId: string | null;
+  inReplyTo: string | null;
+  context: MeshContext | null;
+  urgency: string;
+  ts: string;
+}
+
 let _version = "";
 let _mode: "stdio" | "http" = "stdio";
 let _workspace = "";
@@ -110,6 +179,51 @@ const _toolStats = new Map<string, ToolStats>();
 const _toolLatency = new Map<string, number[]>();
 let _toolCalls = 0;
 let _toolErrors = 0;
+
+/**
+ * clientInfo captured from the MCP `initialize` handshake, keyed by session
+ * id. The id is only known once the transport assigns it (HTTP sessions are
+ * registered on the initialize response's `finish`), so capture stashes the
+ * info here and it is attached to the session when it is created.
+ */
+const _pendingClientInfo = new Map<string, { client: string | null; version: string | null }>();
+
+/**
+ * Identities self-registered via `identify_agent`, kept even when the session
+ * row itself is gone (e.g. stdio sessions that never registered a session).
+ */
+const _agentIdentityById = new Map<string, AgentIdentity>();
+
+/** Agent identity derived from the spawn environment (layer 3 of the merge). */
+export function envAgentIdentity(): AgentIdentity {
+  const pick = (v: string | undefined): string | null => (v && v.trim().length > 0 ? v.trim() : null);
+  return {
+    name: pick(process.env.ASTRIVYA_AGENT_NAME),
+    model: pick(process.env.ASTRIVYA_AGENT_MODEL),
+    provider: pick(process.env.ASTRIVYA_AGENT_PROVIDER),
+    session: pick(process.env.ASTRIVYA_AGENT_SESSION),
+    cwd: pick(process.env.ASTRIVYA_AGENT_CWD),
+    project: pick(process.env.ASTRIVYA_AGENT_PROJECT),
+  };
+}
+
+/** Overlay `overrides` onto `base`; null/undefined overrides fall through. */
+export function mergeAgentIdentity(base: AgentIdentity | null, overrides: Partial<AgentIdentity>): AgentIdentity {
+  const merged: AgentIdentity = {
+    name: null,
+    model: null,
+    provider: null,
+    session: null,
+    cwd: null,
+    project: null,
+  };
+  const fields = Object.keys(merged) as Array<keyof AgentIdentity>;
+  for (const field of fields) {
+    const o = overrides[field];
+    merged[field] = o != null && o !== "" ? o : (base?.[field] ?? null);
+  }
+  return merged;
+}
 
 /** Initialize the tracker. Must be called once after the workspace is known. */
 export function initStatus(opts: { workspace: string; mode: "stdio" | "http"; version: string }): void {
@@ -135,9 +249,14 @@ export function recordSessionStart(opts?: SessionStartOptions): string {
   _sessions++;
   const now = Date.now();
   const mode = opts?.mode || _mode;
+  const pending = _pendingClientInfo.get(id);
+  _pendingClientInfo.delete(id);
+  const client = opts?.client !== undefined ? opts.client : (pending?.client ?? null);
   _sessionsMap.set(id, {
     id,
-    client: opts?.client ?? null,
+    client,
+    clientVersion: opts?.clientVersion !== undefined ? opts.clientVersion : (pending?.version ?? null),
+    agent: opts?.agent ?? envAgentIdentity(),
     mode,
     startedAt: now,
     lastActiveAt: now,
@@ -151,11 +270,12 @@ export function recordSessionStart(opts?: SessionStartOptions): string {
   if (idx !== -1) _endedQueue.splice(idx, 1);
   appendEvent("session_start", {
     session_id: id,
-    client: opts?.client ?? null,
+    client,
+    client_version: opts?.clientVersion !== undefined ? opts.clientVersion : (pending?.version ?? null),
     mode,
     pid: process.pid,
   });
-  telemetrySessionStart({ sessionId: id, client: opts?.client ?? null });
+  telemetrySessionStart({ sessionId: id, client });
   return id;
 }
 
@@ -173,6 +293,98 @@ export function ensureSession(id: string, client?: string | null, mode?: "stdio"
 export function touchSession(id: string): void {
   const s = _sessionsMap.get(id);
   if (s) s.lastActiveAt = Date.now();
+}
+
+/**
+ * Capture clientInfo from the MCP `initialize` handshake. Attached to the
+ * session when it is created (see {@link recordSessionStart}); kept pending
+ * until then.
+ */
+export function captureClientInfo(sessionId: string, client: string | null, version: string | null): void {
+  if (!client && !version) return;
+  _pendingClientInfo.set(sessionId, { client, version });
+  const s = _sessionsMap.get(sessionId);
+  if (s && !s.endedAt) {
+    if (client) s.client = client;
+    if (version) s.clientVersion = version;
+  }
+}
+
+/** The client name/version currently known for a session (if any). */
+export function getClientInfo(sessionId: string): { client: string | null; version: string | null } {
+  const pending = _pendingClientInfo.get(sessionId);
+  const s = _sessionsMap.get(sessionId);
+  return {
+    client: s?.client ?? pending?.client ?? null,
+    version: s?.clientVersion ?? pending?.version ?? null,
+  };
+}
+
+/**
+ * Attach (or update) an agent's self-registered identity (layer 4 of the
+ * merge). Env defaults (layer 3) fill gaps the tool did not override. Appends
+ * an `agent_identify` journal event so the Atlas mesh roster can be rebuilt
+ * from the journal without a live server. Returns the merged identity.
+ */
+export function setAgentIdentity(sessionId: string, overrides: Partial<AgentIdentity>): AgentIdentity {
+  const s = _sessionsMap.get(sessionId);
+  const base = s?.agent ?? _agentIdentityById.get(sessionId) ?? envAgentIdentity();
+  const merged = mergeAgentIdentity(base, overrides);
+  const previous = s?.agent ?? _agentIdentityById.get(sessionId) ?? null;
+  _agentIdentityById.set(sessionId, merged);
+  if (s) s.agent = merged;
+  appendEvent("agent_identify", {
+    session_id: sessionId,
+    name: merged.name,
+    model: merged.model,
+    provider: merged.provider,
+    session: merged.session,
+    cwd: merged.cwd,
+    project: merged.project,
+    changed: previous ? JSON.stringify(previous) !== JSON.stringify(merged) : true,
+    pid: process.pid,
+  });
+  return merged;
+}
+
+/** The identity currently known for a session (merged), or env-derived nulls. */
+export function getAgentIdentity(sessionId: string): AgentIdentity {
+  return _sessionsMap.get(sessionId)?.agent ?? _agentIdentityById.get(sessionId) ?? envAgentIdentity();
+}
+
+/**
+ * Read the Agent Mesh feed for a workspace: journal events of type
+ * `agent_message`, newest last (conversation order). Filtered by optional
+ * `since` (ISO ts), `agent` (sender id) and `type`.
+ */
+export function readMeshMessages(
+  workspace: string,
+  opts: { limit?: number; since?: string; agent?: string; type?: string } = {},
+): MeshMessage[] {
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const since = opts.since ? new Date(opts.since).getTime() : null;
+  const messages: MeshMessage[] = [];
+  for (const ev of readJournal(workspace, 2000)) {
+    if (ev.type !== "agent_message") continue;
+    if (since && new Date(ev.ts).getTime() < since) continue;
+    if (opts.agent && ev.from !== opts.agent) continue;
+    if (opts.type && ev.msg_type !== opts.type) continue;
+    messages.push({
+      id: String(ev.id ?? ""),
+      from: String(ev.from ?? ev.session_id ?? ""),
+      fromName: (ev.from_name as string | null) ?? null,
+      client: (ev.client as string | null) ?? null,
+      to: String(ev.to ?? "all"),
+      type: String(ev.msg_type ?? "general"),
+      text: String(ev.text ?? ""),
+      threadId: (ev.thread_id as string | null) ?? null,
+      inReplyTo: (ev.in_reply_to as string | null) ?? null,
+      context: (ev.context as MeshContext | null) ?? null,
+      urgency: String(ev.urgency ?? "normal"),
+      ts: String(ev.ts),
+    });
+  }
+  return messages.slice(-limit);
 }
 
 /**

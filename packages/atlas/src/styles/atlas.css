@@ -1231,6 +1231,215 @@ body {
   white-space: nowrap;
 }
 
+/* Docked mode: agents running -> the mesh panel sits side-by-side with the
+   graph (canvas shrinks), instead of floating over it. */
+.atlas-app.mesh-docked .atlas-canvas-container {
+  right: 360px;
+}
+.sessions-panel.docked {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  border-radius: 0;
+  border: none;
+  border-left: 1px solid var(--border-subtle);
+}
+.sessions-panel.docked .sessions-panel-header {
+  padding-top: 14px;
+}
+
+/* Agent Mesh roster */
+.mesh-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mesh-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.mesh-agent:not(.alive) {
+  opacity: 0.5;
+}
+.mesh-agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6b6b76;
+  flex-shrink: 0;
+}
+.mesh-agent.alive .mesh-agent-dot {
+  background: #9d7bff;
+  box-shadow: 0 0 6px rgba(157, 123, 255, 0.8);
+}
+.mesh-agent-name {
+  color: var(--text-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mesh-agent-meta {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mesh-agent-last {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* Threads */
+.mesh-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mesh-thread {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.mesh-thread-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.mesh-thread-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: #9d7bff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+.mesh-thread-meta {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.mesh-message {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 0;
+  border-top: 1px dashed var(--border-subtle);
+  font-size: 11px;
+}
+.mesh-message-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mesh-message-from {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.mesh-message-ts {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.mesh-urgency {
+  color: #dcae53;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mesh-type-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+}
+.mesh-type-badge.conflict,
+.mesh-message.conflict .mesh-type-badge {
+  background: rgba(255, 92, 92, 0.16);
+  color: #ff8d8d;
+}
+.mesh-type-badge.ops {
+  background: rgba(220, 174, 83, 0.16);
+  color: #dcae53;
+}
+.mesh-type-badge.review {
+  background: rgba(143, 126, 240, 0.16);
+  color: #b3a6ff;
+}
+.mesh-type-badge.question {
+  background: rgba(94, 140, 255, 0.16);
+  color: #8db1ff;
+}
+.mesh-message-files {
+  color: #3ecf8e;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mesh-message-text {
+  color: var(--text-primary);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.mesh-thread-types {
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+/* Empty-state CTA */
+.mesh-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  padding: 18px 14px;
+  margin: 10px 12px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.mesh-cta svg {
+  color: #9d7bff;
+}
+.mesh-cta strong {
+  color: var(--text-primary);
+}
+.mesh-cta code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #9d7bff;
+  background: rgba(157, 123, 255, 0.08);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;

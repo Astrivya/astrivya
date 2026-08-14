@@ -9,6 +9,7 @@ import {
   Info,
   Layers,
   Maximize2,
+  MessageSquare,
   Minus,
   Orbit,
   Plus,
@@ -42,6 +43,7 @@ const KNOWLEDGE_LAYERS = [
   { name: "Documentation Files", types: ["document"], color: "#c8a15e" },
   { name: "Decision Records (ADRs)", types: ["adr"], color: "#dcae53" },
   { name: "Team Authorship", types: ["person"], color: "#d4798f" },
+  { name: "Agent Mesh", types: ["agent", "agent_message"], color: "#9d7bff" },
   { name: "External Dependencies", types: ["dependency"], color: "#6b6b76" },
 ];
 
@@ -71,6 +73,8 @@ function App() {
 
   // MCP Sessions drawer
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [meshData, setMeshData] = useState<MeshData | null>(null);
+  const [meshError, setMeshError] = useState<string | null>(null);
   const [mcpSessions, setMcpSessions] = useState<McpSessionInfo[] | null>(null);
   const [mcpToolStats, setMcpToolStats] = useState<Record<string, McpToolStat> | null>(null);
   const [mcpLiveSummary, setMcpLiveSummary] = useState<{
@@ -152,6 +156,28 @@ function App() {
         if (!disposed) {
           setMcpError("MCP server unreachable");
           setMcpSessions(null);
+        }
+      }
+      try {
+        const res = await fetch("/api/mcp/mesh");
+        const data = await res.json();
+        if (disposed) return;
+        if (!res.ok || data.error) {
+          setMeshError(data.error || `Mesh probe failed (HTTP ${res.status})`);
+          setMeshData(null);
+          return;
+        }
+        setMeshError(null);
+        setMeshData({
+          messages: data.messages ?? [],
+          senders: data.senders ?? [],
+          count: Number(data.count ?? 0),
+          activeAgents: Number(data.activeAgents ?? 0),
+        });
+      } catch {
+        if (!disposed) {
+          setMeshError("Mesh feed unreachable");
+          setMeshData(null);
         }
       }
     }
@@ -720,7 +746,7 @@ function App() {
   );
 
   return (
-    <div className="atlas-app">
+    <div className={`atlas-app ${meshData && meshData.activeAgents > 0 ? "mesh-docked" : ""}`}>
       <header className="atlas-header">
         <div className="atlas-logo">
           <AstrivyaLogo size={22} />
@@ -772,7 +798,7 @@ function App() {
           <button
             className={`icon-btn ${sessionsOpen ? "active" : ""}`}
             onClick={() => setSessionsOpen((v) => !v)}
-            title="MCP Sessions — live registry of connected AI agents"
+            title="Agent Mesh — A2A conversations between connected AI agents"
           >
             <Users size={16} />
           </button>
@@ -820,6 +846,8 @@ function App() {
           sessions={mcpSessions}
           toolStats={mcpToolStats}
           error={mcpError}
+          mesh={meshData}
+          meshError={meshError}
           onClose={() => setSessionsOpen(false)}
         />
       )}
@@ -1046,6 +1074,15 @@ const EmbedMap = memo(function EmbedMap({
 interface McpSessionInfo {
   id: string;
   client: string | null;
+  clientVersion: string | null;
+  agent: {
+    name: string | null;
+    model: string | null;
+    provider: string | null;
+    session: string | null;
+    cwd: string | null;
+    project: string | null;
+  } | null;
   mode: string;
   startedAt: number;
   lastActiveAt: number;
@@ -1054,6 +1091,42 @@ interface McpSessionInfo {
   lastTool: string | null;
   lastToolAt: number | null;
   endedAt: number | null;
+}
+
+interface MeshFeedMessage {
+  id: string;
+  from: string;
+  fromName: string | null;
+  client: string | null;
+  to: string;
+  type: string;
+  text: string;
+  threadId: string | null;
+  inReplyTo: string | null;
+  context: { files?: string[]; repos?: string[]; branch?: string; lineRange?: string; topic?: string } | null;
+  urgency: string;
+  ts: string;
+  pid?: number | null;
+}
+
+interface MeshSender {
+  id: string;
+  name: string | null;
+  model: string | null;
+  provider: string | null;
+  session: string | null;
+  cwd: string | null;
+  project: string | null;
+  pid: number | null;
+  lastSeen: string | null;
+  alive: boolean;
+}
+
+interface MeshData {
+  messages: MeshFeedMessage[];
+  senders: MeshSender[];
+  count: number;
+  activeAgents: number;
 }
 
 interface McpToolStat {
@@ -1077,6 +1150,8 @@ interface SessionsPanelProps {
   sessions: McpSessionInfo[] | null;
   toolStats: Record<string, McpToolStat> | null;
   error: string | null;
+  mesh: MeshData | null;
+  meshError: string | null;
   onClose: () => void;
 }
 
@@ -1096,16 +1171,56 @@ const SessionsPanel = memo(function SessionsPanel({
   sessions,
   toolStats,
   error,
+  mesh,
+  meshError,
   onClose,
 }: SessionsPanelProps) {
   const active = (sessions ?? []).filter((s) => !s.endedAt);
   const ended = (sessions ?? []).filter((s) => s.endedAt);
+  const docked = (mesh?.activeAgents ?? 0) > 0;
+  const senders = mesh?.senders ?? [];
+  const messages = mesh?.messages ?? [];
+
+  // Group messages into threads (threadId, falling back to the message id).
+  const threadOrder: Array<{ key: string; items: MeshFeedMessage[] }> = [];
+  const threadMap = new Map<string, MeshFeedMessage[]>();
+  for (const m of messages) {
+    const key = m.threadId || m.id;
+    const list = threadMap.get(key);
+    if (list) list.push(m);
+    else threadMap.set(key, [m]);
+  }
+  for (const [key, items] of threadMap) {
+    items.sort((a, b) => a.ts.localeCompare(b.ts));
+    threadOrder.push({ key, items });
+  }
+  threadOrder.sort((a, b) => b.items[b.items.length - 1].ts.localeCompare(a.items[a.items.length - 1].ts));
+
+  const agentName = (s: MeshSender) => s.name || s.model || s.session || s.id;
+  const senderName = (from: string) => senders.find((s) => s.id === from)?.name ?? from;
+  const meshTypeClass = (type: string) =>
+    type === "code-conflict" || type === "blocker"
+      ? "conflict"
+      : ["release", "tag", "ci", "deploy", "vm", "git-push"].includes(type)
+        ? "ops"
+        : type === "review"
+          ? "review"
+          : type === "question"
+            ? "question"
+            : "";
+  const fmtAgo = (iso: string) => {
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60_000) return "now";
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
+    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
+    return new Date(iso).toLocaleDateString();
+  };
 
   return (
-    <div className="sessions-panel">
+    <div className={`sessions-panel ${docked ? "docked" : ""}`}>
       <div className="sessions-panel-header">
         <span className="sessions-panel-title">
-          <Users size={14} /> MCP Sessions
+          <Users size={14} /> Agent Mesh
         </span>
         <button className="sessions-panel-close" onClick={onClose} title="Close">
           <X size={14} />
@@ -1124,7 +1239,8 @@ const SessionsPanel = memo(function SessionsPanel({
       ) : summary ? (
         <div className="sessions-summary">
           <span>
-            <strong>{summary.activeSessions}</strong> active / <strong>{summary.sessions}</strong> total
+            <strong>{mesh?.activeAgents ?? 0}</strong> agents on mesh \u00b7 <strong>{summary.activeSessions}</strong>{" "}
+            active / <strong>{summary.sessions}</strong> total sessions
           </span>
           <span>
             {summary.toolCalls.toLocaleString()} tool calls
@@ -1140,7 +1256,91 @@ const SessionsPanel = memo(function SessionsPanel({
         </div>
       )}
 
-      {!error && sessions && sessions.length === 0 && (
+      {meshError && !error && (
+        <div className="sessions-error">
+          <strong>{meshError}</strong>
+          <p>Atlas reads the mesh directly from the workspace journal (no live server needed).</p>
+        </div>
+      )}
+
+      {!error && !meshError && mesh && senders.length === 0 && messages.length === 0 && (
+        <div className="mesh-cta">
+          <MessageSquare size={18} />
+          <p>
+            <strong>No agents on the mesh yet</strong>
+          </p>
+          <p>
+            Start an agent session (opencode or Claude Code) with the Astrivya MCP server enabled — it registers here
+            and agents talk to each other through <code>agent_message</code>.
+          </p>
+          <code>npx @astrivya/mcp-server</code>
+        </div>
+      )}
+
+      {senders.length > 0 && (
+        <div className="sessions-section">
+          <div className="sessions-section-label">
+            Agents ({senders.filter((s) => s.alive).length} active / {senders.length})
+          </div>
+          <div className="mesh-roster">
+            {senders.map((s) => (
+              <div className={`mesh-agent ${s.alive ? "alive" : ""}`} key={s.id}>
+                <span className="mesh-agent-dot" title={s.alive ? "process alive" : "process ended"} />
+                <span className="mesh-agent-name">{agentName(s)}</span>
+                <span className="mesh-agent-meta">
+                  {[s.provider, s.model].filter(Boolean).join(" \u00b7 ")}
+                  {s.project ? ` \u00b7 ${s.project}` : ""}
+                </span>
+                <span className="mesh-agent-last">{s.lastSeen ? fmtAgo(s.lastSeen) : "\u2014"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {threadOrder.length > 0 && (
+        <div className="sessions-section">
+          <div className="sessions-section-label">Threads ({threadOrder.length})</div>
+          <div className="mesh-threads">
+            {threadOrder.map(({ key, items }) => {
+              const participants = [...new Set(items.map((m) => senderName(m.from)))];
+              const types = [...new Set(items.map((m) => m.type))];
+              const last = items[items.length - 1];
+              return (
+                <div className="mesh-thread" key={key}>
+                  <div className="mesh-thread-head">
+                    <span className="mesh-thread-id" title={key}>
+                      {key === items[0]?.id && !items[0]?.threadId ? "direct" : key}
+                    </span>
+                    <span className="mesh-thread-meta">
+                      {participants.join(", ")} \u00b7 {items.length} msg \u00b7 {fmtAgo(last.ts)}
+                    </span>
+                  </div>
+                  {items.slice(-3).map((m) => (
+                    <div className={`mesh-message ${meshTypeClass(m.type)}`} key={m.id}>
+                      <span className="mesh-message-head">
+                        <span className={`mesh-type-badge ${meshTypeClass(m.type)}`}>{m.type}</span>
+                        <span className="mesh-message-from">{senderName(m.from)}</span>
+                        {m.urgency !== "normal" && <span className="mesh-urgency">{m.urgency}</span>}
+                        <span className="mesh-message-ts">{fmtAgo(m.ts)}</span>
+                      </span>
+                      {m.context?.files && m.context.files.length > 0 && (
+                        <span className="mesh-message-files">{m.context.files.slice(0, 4).join(", ")}</span>
+                      )}
+                      <span className="mesh-message-text">
+                        {m.text.length > 240 ? `${m.text.slice(0, 240)}\u2026` : m.text}
+                      </span>
+                    </div>
+                  ))}
+                  {types.length > 1 && <div className="mesh-thread-types">{types.map((t) => `#${t}`).join(" ")}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {!error && sessions && sessions.length === 0 && senders.length === 0 && (
         <div className="sessions-empty">No sessions yet — connect an AI agent to see it here.</div>
       )}
 
