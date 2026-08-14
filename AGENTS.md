@@ -64,6 +64,40 @@ original `0.1.0` uploads are superseded by `latest`).
 - Env var `ASTRIVYA_CLOUD_URL=http://localhost:3000` wires them together.
 - `scripts/dev.sh` starts both servers from the sibling repo, sets env vars.
 
+## Cloud Packages & Plugin Artifacts (2026-08-14)
+
+**Why no cloud packages on public npm:** the 7 proprietary packages (`cloud`,
+`cloud-api`, `cloud-cli`, `cloud-mcp`, `cron-worker`, `infra-shared`,
+`mcp-gateway` — all `0.1.1`, license `FSL-1.1-ALv2`) live only in the private
+`../astrivya-infra/` repo and publish only to the private Verdaccio registry.
+The `@astrivya:registry=https://npm.astrivya.ai/` scope mapping exists **only in
+the infra repo's `.npmrc`**; the OSS repo maps no scope, so its packages land on
+npmjs.org. Verified 2026-08-14: zero `@astrivya/cloud*`/`infra-shared`/
+`mcp-gateway` imports in any OSS `package.json` or `.ts` file, and no
+`npm.astrivya.ai` references in the published `cli@0.4.0` dist.
+
+**How OSS reaches the cloud (package-free channels):**
+- **HTTP:** `syncCall()` in `packages/mcp-server/src/api.ts` → `https://api.astrivya.ai`
+  (override `ASTRIVYA_CLOUD_URL`), bearer token from config/env.
+- **Runtime plugin artifacts (not npm):** plugin-runtime fetches
+  `${ASTRIVYA_CLOUD_URL}/api/plugins/manifest` (`manifest-client.ts`) and downloads
+  `cloud-cli`/`cloud-mcp` as `.tgz` artifacts **served by the cloud server**,
+  sha256-verified (`plugin-downloader.ts`), installed to `~/.astrivya/plugins/<id>`
+  (entry files are root-level `index.js`/`index.mjs` — the installed artifact
+  layout differs from the infra repo's `dist/` build). Plugin deps (e.g.
+  `@astrivya/cloud-api`) are npm-installed **inside the plugin dir**, resolving
+  through the infra repo's private-registry scope.
+- **`compatibility` fields are advisory:** `compatibility.{cli,api,runtime}` in
+  the local plugin manifest are stored (`plugin-registry.ts`) but **never
+  enforced** by `sync()` (`plugin-manager.ts`). Verified: cloud-cli/cloud-mcp
+  declare `cli: ">=0.5.0"` yet load and run under `cli@0.4.0` — they import only
+  `@astrivya/cloud-api` + `commander` + env vars, no CLI internals.
+- **Cloud-command auth:** plugins read `ASTRIVYA_TOKEN`/`ASTRIVYA_API_KEY` from
+  the environment (the CLI injects its config via `injectPluginEnv()`). A stale
+  token surfaces as `Error: Unauthorized (401) ... Check your token` from the
+  plugin's first API call (e.g. `/api/ide/me` for `who`) — refresh with
+  `astrivya auth login`.
+
 ## npm Published Packages
 
 | Package | npm |
