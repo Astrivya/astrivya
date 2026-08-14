@@ -49,6 +49,26 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "astrivya-auto-update-"));
 }
 
+// CI env vars disable the update check / plugin sync (update-notifier reads
+// process.env.CI), which would make every "enabled path" test below no-op.
+beforeEach(() => {
+  process.env.CI = "";
+  process.env.GITHUB_ACTIONS = "";
+  process.env.GITLAB_CI = "";
+  process.env.CIRCLECI = "";
+  process.env.TRAVIS = "";
+  process.env.NO_UPDATE_NOTIFIER = "";
+});
+
+afterEach(() => {
+  process.env.CI = "";
+  process.env.GITHUB_ACTIONS = "";
+  process.env.GITLAB_CI = "";
+  process.env.CIRCLECI = "";
+  process.env.TRAVIS = "";
+  process.env.NO_UPDATE_NOTIFIER = "";
+});
+
 describe("auto-update — sameMajor", () => {
   it("accepts same-major updates", () => {
     expect(sameMajor("0.1.0", "0.2.0")).toBe(true);
