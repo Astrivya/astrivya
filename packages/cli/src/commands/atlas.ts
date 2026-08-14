@@ -296,10 +296,10 @@ export function registerAtlas(program: Command): void {
                 return;
               }
               const projected = pca2(vectors);
-              let minX = Number.POSITIVE_INFINITY,
-                maxX = Number.NEGATIVE_INFINITY,
-                minY = Number.POSITIVE_INFINITY,
-                maxY = Number.NEGATIVE_INFINITY;
+              let minX = Number.POSITIVE_INFINITY;
+              let maxX = Number.NEGATIVE_INFINITY;
+              let minY = Number.POSITIVE_INFINITY;
+              let maxY = Number.NEGATIVE_INFINITY;
               for (const [x, y] of projected) {
                 if (x < minX) minX = x;
                 if (x > maxX) maxX = x;
