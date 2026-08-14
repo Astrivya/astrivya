@@ -20,6 +20,10 @@ describe("mcp-server telemetry", () => {
     process.env.ASTRIVYA_TELEMETRY = "";
     process.env.NO_TELEMETRY = "";
     process.env.CI = "";
+    process.env.GITHUB_ACTIONS = "";
+    process.env.GITLAB_CI = "";
+    process.env.CIRCLECI = "";
+    process.env.TRAVIS = "";
   });
 
   afterEach(() => {
@@ -27,6 +31,10 @@ describe("mcp-server telemetry", () => {
     process.env.ASTRIVYA_TELEMETRY = "";
     process.env.NO_TELEMETRY = "";
     process.env.CI = "";
+    process.env.GITHUB_ACTIONS = "";
+    process.env.GITLAB_CI = "";
+    process.env.CIRCLECI = "";
+    process.env.TRAVIS = "";
   });
 
   it("is enabled by default (opt-out)", () => {
