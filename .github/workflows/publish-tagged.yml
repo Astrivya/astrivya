@@ -1,0 +1,48 @@
+name: Publish (tagged)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to publish from (e.g. plugin-api-v0.4.0)"
+        required: true
+        type: string
+      package:
+        description: "Workspace package to publish (e.g. packages/plugin-api)"
+        required: true
+        type: string
+
+concurrency:
+  group: publish-tagged
+  cancel-in-progress: false
+
+jobs:
+  # Publishes ONE package from a specific tag. Use for gap-fill publishes
+  # (a version the release flow skipped) — unlike a full ordered republish it
+  # never collides with already-published versions.
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build package
+        run: npm run build --workspace=${{ inputs.package }}
+
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd "${{ inputs.package }}"
+          npm publish --access public
