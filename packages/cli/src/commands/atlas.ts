@@ -21,6 +21,82 @@ interface MeshSenderRow {
   lastSeen: string;
 }
 
+export interface MeshSessionRow {
+  id: string;
+  client: string | null;
+  clientVersion: string | null;
+  mode: string | null;
+  pid: number | null;
+  legacy: boolean;
+  state: "active" | "orphan" | "ended";
+  toolCalls: number;
+  lastTool: string | null;
+  startedAt: number | null;
+  lastActiveAt: number | null;
+  agent: {
+    name: string | null;
+    model: string | null;
+    provider: string | null;
+    session: string | null;
+    project: string | null;
+  } | null;
+}
+
+/**
+ * Derive the mesh session roster from journal events: every session the
+ * journal ever saw, classified active/orphan/ended by PID liveness
+ * (`journalSessionRows`), identity-merged from `agent_identify` rows, plus
+ * client/mode/startedAt from `session_start`. Sorted active first, then by
+ * last activity. Injectable `isAlive` for tests.
+ */
+export function deriveMeshSessions(
+  events: Array<Record<string, unknown>>,
+  identityById: ReadonlyMap<string, MeshSenderRow>,
+  isAlive: (pid: number | null) => boolean = isPidAlive,
+): MeshSessionRow[] {
+  const startById = new Map<string, Record<string, unknown>>();
+  for (const e of events) {
+    if (e.type !== "session_start") continue;
+    const sid = e.session_id ? `sid:${String(e.session_id)}` : `pid:${String(e.pid ?? "?")}`;
+    startById.set(sid, e);
+  }
+  const sessions = journalSessionRows(events, isAlive).map((r) => {
+    const key = r.legacy ? `pid:${String(r.pid ?? "?")}` : `sid:${r.id}`;
+    const startEv = startById.get(key);
+    const ident = identityById.get(r.id);
+    return {
+      id: r.id,
+      client: (startEv?.client as string | null) ?? r.client,
+      clientVersion: (startEv?.client_version as string | null) ?? null,
+      mode: (startEv?.mode as string | null) ?? null,
+      pid: r.pid,
+      legacy: r.legacy,
+      state: r.state,
+      toolCalls: r.toolCalls,
+      lastTool: r.lastTool,
+      startedAt: startEv ? new Date(String(startEv.ts)).getTime() : null,
+      lastActiveAt: r.lastTs,
+      agent: ident
+        ? {
+            name: ident.name,
+            model: ident.model,
+            provider: ident.provider,
+            session: ident.session,
+            project: ident.project,
+          }
+        : null,
+    };
+  });
+  const rank = { active: 0, orphan: 1, ended: 2 } as const;
+  sessions.sort((a, b) => {
+    if (rank[a.state as keyof typeof rank] !== rank[b.state as keyof typeof rank]) {
+      return rank[a.state as keyof typeof rank] - rank[b.state as keyof typeof rank];
+    }
+    return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
+  });
+  return sessions;
+}
+
 /**
  * When the MCP HTTP registry (ASTRIVYA_MCP_URL, default localhost:3001) is
  * unreachable, spawn `mcp-server --sse` as a child of Atlas so the live
@@ -96,7 +172,7 @@ export function registerAtlas(program: Command): void {
       const server = http.createServer((req, res) => {
         // CORS Headers
         res.setHeader("Access-Control-Allow-Origin", "*");
-        res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
         if (req.method === "OPTIONS") {
@@ -159,6 +235,88 @@ export function registerAtlas(program: Command): void {
                   hint: "Start it with: astrivya mcp-server --sse --port 3001",
                 }),
               );
+            }
+          })();
+          return;
+        }
+
+        if ((pathname === "/api/mcp/mesh" || pathname === "/api/mcp/mesh/send") && req.method === "POST") {
+          void (async () => {
+            try {
+              const chunks: Buffer[] = [];
+              for await (const chunk of req) chunks.push(chunk as Buffer);
+              const body = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}") as Record<string, unknown>;
+              const text = typeof body.text === "string" ? body.text.trim() : "";
+              if (!text || text.length > 8000) {
+                res.writeHead(400, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "`text` is required (max 8000 chars)." }));
+                return;
+              }
+              const type = typeof body.type === "string" ? body.type : "general";
+              const urgency = typeof body.urgency === "string" ? body.urgency : "normal";
+              const id = `mesh::${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+              const event = {
+                ts: new Date().toISOString(),
+                type: "agent_message",
+                id,
+                from: "atlas",
+                from_name: "atlas",
+                client: "atlas",
+                to: typeof body.to === "string" && body.to ? body.to : "all",
+                msg_type: type,
+                urgency,
+                text,
+                thread_id: typeof body.thread_id === "string" && body.thread_id ? body.thread_id : null,
+                in_reply_to: typeof body.in_reply_to === "string" && body.in_reply_to ? body.in_reply_to : null,
+                context: body.context && typeof body.context === "object" ? body.context : null,
+                pid: process.pid,
+              };
+              fs.mkdirSync(path.join(workspacePath, ".astrivya", "mcp"), { recursive: true });
+              fs.appendFileSync(
+                path.join(workspacePath, ".astrivya", "mcp", "events.ndjson"),
+                `${JSON.stringify(event)}\n`,
+              );
+              // Index into the AKG (same scheme as meshIndexMessage in the
+              // mcp-server) so host-posted messages are searchable too.
+              const now = Date.now();
+              storage.upsertNode({
+                id,
+                label: text.length > 72 ? `${text.slice(0, 72)}\u2026` : text,
+                type: "agent_message",
+                content: text,
+                metadata: JSON.stringify({
+                  type,
+                  thread_id: event.thread_id,
+                  from: "atlas",
+                  to: event.to,
+                  urgency,
+                  ts: event.ts,
+                }),
+                createdAt: now,
+                updatedAt: now,
+              });
+              storage.upsertChunk({
+                id: `chunk:${id}`,
+                nodeId: id,
+                filePath: "mesh://messages",
+                content: text,
+                createdAt: now,
+                updatedAt: now,
+              });
+              storage.upsertNode({
+                id: "agent:atlas",
+                label: "atlas",
+                type: "agent",
+                metadata: JSON.stringify({ session_id: "atlas" }),
+                createdAt: now,
+                updatedAt: now,
+              });
+              storage.addEdge({ source: "agent:atlas", target: id, relation: "generated" });
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ ok: true, id, thread_id: event.thread_id }));
+            } catch (err) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: `Mesh send failed: ${getErrorMessage(err)}` }));
             }
           })();
           return;
@@ -231,46 +389,7 @@ export function registerAtlas(program: Command): void {
             // All sessions ever seen in the journal, classified by PID
             // liveness (active / orphan / ended) — so the panel shows every
             // current running session even without a live HTTP server.
-            const startById = new Map<string, Record<string, unknown>>();
-            for (const e of events) {
-              if (e.type !== "session_start") continue;
-              const sid = e.session_id ? `sid:${String(e.session_id)}` : `pid:${String(e.pid ?? "?")}`;
-              startById.set(sid, e);
-            }
-            const sessions = journalSessionRows(events).map((r) => {
-              const key = r.legacy ? `pid:${String(r.pid ?? "?")}` : `sid:${r.id}`;
-              const startEv = startById.get(key);
-              const ident = identityById.get(r.id);
-              return {
-                id: r.id,
-                client: (startEv?.client as string | null) ?? r.client,
-                clientVersion: (startEv?.client_version as string | null) ?? null,
-                mode: (startEv?.mode as string | null) ?? null,
-                pid: r.pid,
-                legacy: r.legacy,
-                state: r.state,
-                toolCalls: r.toolCalls,
-                lastTool: r.lastTool,
-                startedAt: startEv ? new Date(String(startEv.ts)).getTime() : null,
-                lastActiveAt: r.lastTs,
-                agent: ident
-                  ? {
-                      name: ident.name,
-                      model: ident.model,
-                      provider: ident.provider,
-                      session: ident.session,
-                      project: ident.project,
-                    }
-                  : null,
-              };
-            });
-            sessions.sort((a, b) => {
-              const rank = { active: 0, orphan: 1, ended: 2 } as const;
-              if (rank[a.state as keyof typeof rank] !== rank[b.state as keyof typeof rank]) {
-                return rank[a.state as keyof typeof rank] - rank[b.state as keyof typeof rank];
-              }
-              return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
-            });
+            const sessions = deriveMeshSessions(events, identityById);
             const running = sessions.filter((s) => s.state === "active").length;
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(
@@ -301,8 +420,56 @@ export function registerAtlas(program: Command): void {
                 "SELECT id, label, type, source_file, community, churn_rate, contributor_count, created_at, updated_at FROM nodes;",
               );
               const edges = storage.runQuery("SELECT source, target, relation, weight FROM edges;");
+              const edgeSet = new Set(edges.map((e) => `${e.source}\u0001${e.target}\u0001${e.relation}`));
+
+              // Hierarchy synthesis: the identity graph links workspace → repo,
+              // and the code chunker links folder → folder / folder → file, but
+              // the repo → top-level folder hop is never recorded. Synthesize it
+              // at read time so the chain workspace → repo → folders → files is
+              // complete without a reindex. Also attach a `group` per node
+              // (top-level module) so the UI can cluster by repo/module.
+              const repos = storage.listRepos();
+              const repoRel = new Map<string, string>();
+              for (const r of repos) {
+                const rel = r.metadata?.relPath;
+                if (typeof rel === "string") repoRel.set(r.id, rel);
+              }
+              const folderNodes = nodes.filter((n) => n.type === "folder");
+              // A folder is "directly under" a repo when its path has exactly one
+              // segment more than the repo's relPath.
+              const segs = (id: string): string[] => String(id).split("::")[1]?.split("/").filter(Boolean) ?? [];
+              const isDirectChild = (rel: string, id: string): boolean => {
+                if (rel === ".") return segs(id).length === 1;
+                return segs(id).length === rel.split("/").length + 1 && id.startsWith(`folder::${rel}/`);
+              };
+              for (const r of repos) {
+                const rel = repoRel.get(r.id) ?? ".";
+                for (const f of folderNodes) {
+                  if (!isDirectChild(rel, String(f.id))) continue;
+                  const key = `${r.id}\u0001${f.id}\u0001contains`;
+                  if (!edgeSet.has(key)) {
+                    edges.push({ source: r.id, target: f.id, relation: "contains", weight: 1 });
+                    edgeSet.add(key);
+                  }
+                }
+              }
+
+              for (const n of nodes) {
+                const sf = n.source_file ? String(n.source_file) : "";
+                n.group =
+                  n.type === "workspace" ? "workspace" : n.type === "repo" ? "repo" : sf.split("/")[0] || "root";
+              }
+              const workspaceNode = nodes.find((n) => n.type === "workspace") ?? null;
+              const repoList = repos.map((r) => {
+                const rel = repoRel.get(r.id) ?? ".";
+                const count = nodes.filter((n) => {
+                  const sf = n.source_file ? String(n.source_file) : "";
+                  return rel === "." ? true : sf === rel || sf.startsWith(`${rel}/`);
+                }).length;
+                return { id: r.id, label: r.label, relPath: rel, nodeCount: count };
+              });
               res.writeHead(200);
-              res.end(JSON.stringify({ nodes, edges }));
+              res.end(JSON.stringify({ nodes, edges, workspace: workspaceNode, repos: repoList }));
               return;
             }
 

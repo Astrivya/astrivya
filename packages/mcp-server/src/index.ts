@@ -35,7 +35,7 @@ import { loadToolPlugins } from "./plugin";
 import { PROMPT_DEFINITIONS, buildPromptPrompt } from "./prompts";
 import { RESOURCE_DEFINITIONS, buildToolList } from "./schemas";
 import {
-  captureClientInfo,
+  attachClientIdentity,
   ensureSession,
   getClientInfo,
   getStatus,
@@ -65,7 +65,7 @@ function createServer() {
   server.setRequestHandler(InitializeRequestSchema, async (request, extra) => {
     const ci = request.params.clientInfo;
     const sessionId = extra?.sessionId ?? `stdio:${process.pid}`;
-    captureClientInfo(sessionId, ci?.name ?? null, ci?.version ?? null);
+    attachClientIdentity(sessionId, ci?.name ?? null, ci?.version ?? null);
     const requestedVersion = request.params.protocolVersion;
     const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion)
       ? requestedVersion

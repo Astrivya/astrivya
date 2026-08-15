@@ -151,6 +151,29 @@ describe("mcp-server status module", () => {
     expect(sess?.clientVersion).toBe("0.5.0");
   });
 
+  it("attachClientIdentity fills the name gap and journals agent_identify", () => {
+    status.initStatus({ workspace: tmpDir, mode: "stdio", version: "1.0.0" });
+    const sid = status.recordSessionStart({ id: "stdio:123", client: "stdio" });
+    status.attachClientIdentity(sid, "opencode", "0.5.0");
+    const sess = status.getStatus().sessionsList.find((s) => s.id === sid);
+    expect(sess?.client).toBe("opencode");
+    expect(sess?.clientVersion).toBe("0.5.0");
+    expect(status.getAgentIdentity(sid).name).toBe("opencode");
+    const events = status.readJournal(tmpDir, 100);
+    const idEvent = events.find((e) => e.type === "agent_identify");
+    expect(idEvent?.name).toBe("opencode");
+    expect(idEvent?.session_id).toBe(sid);
+  });
+
+  it("attachClientIdentity never overrides an env-provided name", () => {
+    status.initStatus({ workspace: tmpDir, mode: "stdio", version: "1.0.0" });
+    vi.stubEnv("ASTRIVYA_AGENT_NAME", "mesh-builder");
+    const sid = status.recordSessionStart({ id: "stdio:env" });
+    status.attachClientIdentity(sid, "opencode", "0.5.0");
+    expect(status.getAgentIdentity(sid).name).toBe("mesh-builder");
+    vi.unstubAllEnvs();
+  });
+
   it("merges env identity with identify_agent overrides and journals the event", () => {
     status.initStatus({ workspace: tmpDir, mode: "stdio", version: "1.0.0" });
     vi.stubEnv("ASTRIVYA_AGENT_NAME", "mesh-builder");

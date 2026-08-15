@@ -23,6 +23,7 @@ import {
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   type AkgNode,
+  type AkgRepoInfo,
   type AkgStats,
   type EmbedPoint,
   type GraphData,
@@ -36,7 +37,7 @@ import { ForceLayout } from "./layout/force-layout";
 import { PixiRenderer } from "./renderer/pixi-renderer";
 
 const KNOWLEDGE_LAYERS = [
-  { name: "Workspace Structure", types: ["workspace", "folder"], color: "#7986d6" },
+  { name: "Repos & Structure", types: ["workspace", "repo", "folder"], color: "#9d7bff" },
   { name: "Files & Code Modules", types: ["file"], color: "#5b8cff" },
   { name: "Functions & Methods", types: ["function"], color: "#3ecf8e" },
   { name: "Classes & Interfaces", types: ["class", "interface"], color: "#8f7ef0" },
@@ -59,6 +60,8 @@ function App() {
   const [stats, setStats] = useState<AkgStats | null>(null);
   const [communities, setCommunities] = useState<{ id: number; label: string; nodeCount: number }[]>([]);
   const [visibleTypes, setVisibleTypes] = useState<Set<string>>(new Set(ALL_TYPES));
+  const [workspaceRoot, setWorkspaceRoot] = useState<AkgNode | null>(null);
+  const [repos, setRepos] = useState<AkgRepoInfo[]>([]);
 
   // App UI State
   const [selectedNode, setSelectedNode] = useState<AkgNode | null>(null);
@@ -75,6 +78,7 @@ function App() {
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [meshData, setMeshData] = useState<MeshData | null>(null);
   const [meshError, setMeshError] = useState<string | null>(null);
+  const [meshThreadFocus, setMeshThreadFocus] = useState<string | null>(null);
   const [mcpSessions, setMcpSessions] = useState<McpSessionInfo[] | null>(null);
   const [mcpToolStats, setMcpToolStats] = useState<Record<string, McpToolStat> | null>(null);
   const [mcpLiveSummary, setMcpLiveSummary] = useState<{
@@ -102,7 +106,7 @@ function App() {
   const fpsTimerRef = useRef(0);
   const [settled, setSettled] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
-  const graphRef = useRef<GraphData>({ nodes: [], edges: [] });
+  const graphRef = useRef<GraphData>({ nodes: [], edges: [], workspace: null, repos: [] });
 
   const visibleTypesRef = useRef(visibleTypes);
   visibleTypesRef.current = visibleTypes;
@@ -158,6 +162,35 @@ function App() {
           setMcpSessions(null);
         }
       }
+    }
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [sessionsOpen]);
+
+  // Poll the mesh feed every 5s always — so an unread badge can accumulate
+  // while the panel is closed. When the panel is open, mark everything seen.
+  const sessionsOpenRef = useRef(sessionsOpen);
+  sessionsOpenRef.current = sessionsOpen;
+  const meshSeenRef = useRef(0);
+  const [meshUnread, setMeshUnread] = useState(0);
+  const applyMeshDataRef = useRef<(data: MeshData) => void>(() => {});
+  applyMeshDataRef.current = (data: MeshData) => {
+    setMeshData(data);
+    const open = sessionsOpenRef.current;
+    if (open) {
+      meshSeenRef.current = Math.max(meshSeenRef.current, Date.now());
+      setMeshUnread(0);
+      return;
+    }
+    setMeshUnread(data.messages.filter((m) => new Date(m.ts).getTime() > meshSeenRef.current).length);
+  };
+  useEffect(() => {
+    let disposed = false;
+    async function pollMesh() {
       try {
         const res = await fetch("/api/mcp/mesh");
         const data = await res.json();
@@ -168,7 +201,7 @@ function App() {
           return;
         }
         setMeshError(null);
-        setMeshData({
+        applyMeshDataRef.current({
           messages: data.messages ?? [],
           senders: data.senders ?? [],
           sessions: data.sessions ?? [],
@@ -182,13 +215,13 @@ function App() {
         }
       }
     }
-    poll();
-    const timer = setInterval(poll, 3000);
+    pollMesh();
+    const timer = setInterval(pollMesh, 5000);
     return () => {
       disposed = true;
       clearInterval(timer);
     };
-  }, [sessionsOpen]);
+  }, []);
 
   // Initialize data + renderer once
   useEffect(() => {
@@ -204,6 +237,8 @@ function App() {
         graphRef.current = fullGraph;
         setStats(dbStats);
         setCommunities(commList || []);
+        setWorkspaceRoot(fullGraph.workspace ?? null);
+        setRepos(fullGraph.repos ?? []);
 
         const layout = new ForceLayout();
         layoutRef.current = layout;
@@ -286,6 +321,8 @@ function App() {
           graphRef.current = updatedGraph;
           setStats(dbStats);
           setCommunities(commList || []);
+          setWorkspaceRoot(updatedGraph.workspace ?? null);
+          setRepos(updatedGraph.repos ?? []);
 
           if (layoutRef.current && rendererRef.current) {
             layoutRef.current.setGraph(updatedGraph.nodes, updatedGraph.edges);
@@ -314,14 +351,18 @@ function App() {
       } else if (e.key.toLowerCase() === "l") {
         setLayersOpen((v) => !v);
       } else if (e.key === "Escape") {
-        setInspectorOpen(false);
-        setSelectedNode(null);
-        setPathResult(null);
-        setImpactReport(null);
-        setTopoResult(null);
-        setEmbedMap(null);
-        setVisualMode("explore");
-        rendererRef.current?.setSelection(null);
+        if (sessionsOpenRef.current) {
+          setSessionsOpen(false);
+        } else {
+          setInspectorOpen(false);
+          setSelectedNode(null);
+          setPathResult(null);
+          setImpactReport(null);
+          setTopoResult(null);
+          setEmbedMap(null);
+          setVisualMode("explore");
+          rendererRef.current?.setSelection(null);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -362,6 +403,14 @@ function App() {
         setNeighbors(details.neighbors || []);
         setInspectorOpen(true);
         rendererRef.current?.setSelection(nodeId);
+        // agent_message node → jump to its thread in the Agent Mesh panel
+        if (details.node?.type === "agent_message" && meshData) {
+          const msg = meshData.messages.find((m) => m.id === nodeId);
+          if (msg) {
+            setMeshThreadFocus(msg.threadId || msg.id);
+            setSessionsOpen(true);
+          }
+        }
       })();
     } catch (err) {
       console.error("Failed to fetch node details:", err);
@@ -618,6 +667,24 @@ function App() {
 
         <div className="drawer-divider" />
 
+        {repos.length > 0 && (
+          <>
+            <div className="drawer-title small">Repositories ({repos.length})</div>
+            <div className="community-list">
+              {repos.map((r) => (
+                <div key={r.id} className="community-item" title={r.relPath === "." ? "workspace root" : r.relPath}>
+                  <span>
+                    <span className="status-repo-dot" aria-hidden />
+                    {r.label}
+                  </span>
+                  <span className="count">{r.nodeCount.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+            <div className="drawer-divider" />
+          </>
+        )}
+
         <div className="drawer-title small">Community Clusters ({communities.length})</div>
         <div className="community-list">
           {communities.length === 0 ? (
@@ -799,9 +866,14 @@ function App() {
           <button
             className={`icon-btn ${sessionsOpen ? "active" : ""}`}
             onClick={() => setSessionsOpen((v) => !v)}
-            title="Agent Mesh — A2A conversations between connected AI agents"
+            title={`Agent Mesh${meshUnread > 0 ? ` — ${meshUnread} unread` : ""}`}
+            aria-label={`Agent Mesh${meshUnread > 0 ? ` (${meshUnread} unread)` : ""}`}
+            aria-expanded={sessionsOpen}
           >
             <Users size={16} />
+            {!sessionsOpen && meshUnread > 0 && (
+              <span className="mesh-unread-badge">{meshUnread > 9 ? "9+" : meshUnread}</span>
+            )}
           </button>
           <button
             className={`icon-btn ${inspectorOpen ? "active" : ""}`}
@@ -849,6 +921,23 @@ function App() {
           error={mcpError}
           mesh={meshData}
           meshError={meshError}
+          focusThread={meshThreadFocus}
+          onRefreshMesh={async () => {
+            try {
+              const res = await fetch("/api/mcp/mesh");
+              const data = await res.json();
+              if (!res.ok || data.error) return;
+              applyMeshDataRef.current({
+                messages: data.messages ?? [],
+                senders: data.senders ?? [],
+                sessions: data.sessions ?? [],
+                count: Number(data.count ?? 0),
+                activeAgents: Number(data.activeAgents ?? 0),
+              });
+            } catch {
+              // next poll catches it
+            }
+          }}
           onClose={() => setSessionsOpen(false)}
         />
       )}
@@ -858,6 +947,18 @@ function App() {
           <div className={`status-dot ${stats ? "live" : ""}`} />
           <span>{stats ? "localhost:4200 · live" : "connecting…"}</span>
         </div>
+        {workspaceRoot && (
+          <div className="status-root" title={workspaceRoot.id}>
+            <span className="status-root-label">{workspaceRoot.label}</span>
+            {repos.length > 0 && <span className="status-root-sep">/</span>}
+            {repos.slice(0, 3).map((r) => (
+              <span key={r.id} className="status-repo">
+                {r.label} ({r.nodeCount.toLocaleString()})
+              </span>
+            ))}
+            {repos.length > 3 && <span className="status-root-sep">+{repos.length - 3}</span>}
+          </div>
+        )}
         {stats && (
           <div className="status-metrics">
             <span>{stats.nodes.toLocaleString()} nodes</span>
@@ -1175,6 +1276,8 @@ interface SessionsPanelProps {
   error: string | null;
   mesh: MeshData | null;
   meshError: string | null;
+  focusThread: string | null;
+  onRefreshMesh: () => void;
   onClose: () => void;
 }
 
@@ -1196,6 +1299,8 @@ const SessionsPanel = memo(function SessionsPanel({
   error,
   mesh,
   meshError,
+  focusThread,
+  onRefreshMesh,
   onClose,
 }: SessionsPanelProps) {
   const active = (sessions ?? []).filter((s) => !s.endedAt);
@@ -1204,8 +1309,19 @@ const SessionsPanel = memo(function SessionsPanel({
   const senders = mesh?.senders ?? [];
   const messages = mesh?.messages ?? [];
   const [showPrevious, setShowPrevious] = useState(false);
+  const [rosterCollapsed, setRosterCollapsed] = useState(false);
+  const [showAllOrphaned, setShowAllOrphaned] = useState(false);
+  const [showAllEnded, setShowAllEnded] = useState(false);
+  const [composeText, setComposeText] = useState("");
+  const [composeType, setComposeType] = useState("general");
+  const [composeStatus, setComposeStatus] = useState<"idle" | "sending" | "sent">("idle");
+  const [composeError, setComposeError] = useState<string | null>(null);
+  const composeInputRef = useRef<HTMLInputElement>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  const [replyToThread, setReplyToThread] = useState<string | null>(focusThread);
   const meshSessions = mesh?.sessions ?? [];
-  const runningSessions = meshSessions.filter((s) => s.state === "active");
+  const runningSessions = meshSessions.filter((s) => s.state === "active" && !s.legacy);
+  const legacyActive = meshSessions.filter((s) => s.state === "active" && s.legacy);
   const previousSessions = meshSessions.filter((s) => s.state !== "active");
 
   // Group messages into threads (threadId, falling back to the message id).
@@ -1222,13 +1338,101 @@ const SessionsPanel = memo(function SessionsPanel({
     threadOrder.push({ key, items });
   }
   threadOrder.sort((a, b) => b.items[b.items.length - 1].ts.localeCompare(a.items[a.items.length - 1].ts));
+  if (focusThread) {
+    const idx = threadOrder.findIndex((t) => t.key === focusThread);
+    if (idx > 0) threadOrder.unshift(threadOrder.splice(idx, 1)[0]);
+  }
+
+  // Conflict detection (#8): if a thread contains a code-conflict message and
+  // ≥2 messages touch the same branch or overlapping files, flag those.
+  const conflictIds = (thread: MeshFeedMessage[]): Set<string> => {
+    const ids = new Set<string>();
+    const hasConflict = thread.some((m) => m.type === "code-conflict");
+    if (!hasConflict || thread.length < 2) return ids;
+    const byBranch = new Map<string, MeshFeedMessage[]>();
+    const byFile = new Map<string, MeshFeedMessage[]>();
+    for (const m of thread) {
+      const branch = m.context?.branch;
+      if (branch) {
+        const list = byBranch.get(branch) ?? [];
+        list.push(m);
+        byBranch.set(branch, list);
+      }
+      for (const f of m.context?.files ?? []) {
+        const list = byFile.get(f) ?? [];
+        list.push(m);
+        byFile.set(f, list);
+      }
+    }
+    for (const list of [...byBranch.values(), ...byFile.values()]) {
+      if (list.length >= 2) list.forEach((m) => ids.add(m.id));
+    }
+    return ids;
+  };
+
+  useEffect(() => {
+    if (focusThread) setReplyToThread(focusThread);
+  }, [focusThread]);
+
+  useEffect(() => {
+    if (!focusThread) return;
+    const el = document.querySelector(".mesh-thread.thread-focused");
+    el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [focusThread, mesh]);
+
+  const sendCompose = async () => {
+    const text = composeText.trim();
+    if (!text || composeStatus === "sending") return;
+    setComposeStatus("sending");
+    setComposeError(null);
+    try {
+      const res = await fetch("/api/mcp/mesh/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: composeType, text, thread_id: replyToThread }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setComposeError(body.error || `Send failed (HTTP ${res.status})`);
+        setComposeStatus("idle");
+        return;
+      }
+      setComposeText("");
+      setComposeStatus("sent");
+      onRefreshMesh();
+      window.setTimeout(() => setComposeStatus("idle"), 1600);
+    } catch {
+      setComposeError("Mesh unreachable — message not sent");
+      setComposeStatus("idle");
+    }
+  };
+
+  const hadThreadsRef = useRef(false);
+  useEffect(() => {
+    if (threadOrder.length > 0 && !hadThreadsRef.current) setRosterCollapsed(true);
+    hadThreadsRef.current = threadOrder.length > 0;
+  }, [threadOrder.length]);
+
+  useEffect(() => {
+    if (replyToThread) composeInputRef.current?.focus();
+  }, [replyToThread]);
 
   const agentName = (s: MeshSender) => s.name || s.model || s.session || s.id;
   const senderName = (from: string) => senders.find((s) => s.id === from)?.name ?? from;
-  const sessionName = (s: MeshSession) => s.agent?.name || s.client || s.id;
-  const sessionMeta = (s: MeshSession) =>
-    [s.agent?.provider, s.agent?.model].filter(Boolean).join(" \u00b7 ") ||
-    [s.clientVersion, s.mode].filter(Boolean).join(" \u00b7 ");
+  const isProbeClient = (c: string | null) =>
+    !!c && /^(Mozilla\/|curl|PowerShell|python-requests|Wget|Go-http)/i.test(c);
+  const sessionName = (s: MeshSession) =>
+    s.agent?.name ?? (s.legacy ? `pid:${s.pid ?? "?"}` : s.client && !isProbeClient(s.client) ? s.client : s.id);
+  const sessionMeta = (s: MeshSession) => {
+    const parts: string[] = [];
+    if (s.agent?.provider || s.agent?.model) parts.push([s.agent.provider, s.agent.model].filter(Boolean).join(" · "));
+    else if (s.clientVersion && s.clientVersion !== s.client) parts.push(s.clientVersion);
+    if (s.agent?.project) parts.push(s.agent.project);
+    if (!s.agent?.name && !s.agent?.provider && !s.agent?.model) parts.push("unidentified");
+    else if (!s.agent && s.mode && s.mode !== s.client) parts.push(s.mode);
+    return parts.join(" · ");
+  };
+  const sessionTitle = (s: MeshSession) => `${sessionName(s)} — ${sessionMeta(s)}${s.pid ? ` (pid ${s.pid})` : ""}`;
   const meshTypeClass = (type: string) =>
     type === "code-conflict" || type === "blocker"
       ? "conflict"
@@ -1238,24 +1442,53 @@ const SessionsPanel = memo(function SessionsPanel({
           ? "review"
           : type === "question"
             ? "question"
-            : "";
+            : "general";
   const fmtAgo = (iso: string) => {
     const ms = Date.now() - new Date(iso).getTime();
     if (ms < 60_000) return "now";
-    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
-    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
-    return new Date(iso).toLocaleDateString();
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
+    if (ms < 7 * 86_400_000) return `${Math.floor(ms / 86_400_000)}d`;
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
+  const fullDate = (iso: string) => new Date(iso).toLocaleString();
+
+  const orphaned = previousSessions.filter((s) => s.state === "orphan" && !isProbeClient(s.client));
+  const endedPrev = previousSessions.filter((s) => s.state === "ended" && !isProbeClient(s.client));
+  const probes = previousSessions.filter((s) => isProbeClient(s.client));
+  const truncated = (m: MeshFeedMessage) => m.text.length > 240 && !expandedIds.has(m.id);
 
   return (
-    <div className={`sessions-panel ${docked ? "docked" : ""}`}>
+    <div className={`sessions-panel ${docked ? "docked" : ""}`} id="sessions-panel">
       <div className="sessions-panel-header">
         <span className="sessions-panel-title">
-          <Users size={14} /> Agent Mesh
+          <Users size={14} aria-hidden /> Agent Mesh
         </span>
-        <button className="sessions-panel-close" onClick={onClose} title="Close">
-          <X size={14} />
-        </button>
+        <div className="sessions-panel-header-right">
+          <span
+            className={`mesh-live-chip ${docked ? "live" : ""}`}
+            title={docked ? "Agents connected" : "Journal mode — no live agents"}
+          >
+            <span className="mesh-live-dot" aria-hidden />
+            {docked ? "Live" : "Journal"}
+          </span>
+          <button
+            className="sessions-panel-refresh"
+            onClick={onRefreshMesh}
+            title="Refresh mesh feed"
+            aria-label="Refresh mesh feed"
+          >
+            <RefreshCw size={12} aria-hidden />
+          </button>
+          <button
+            className="sessions-panel-close"
+            onClick={onClose}
+            title="Close (Esc)"
+            aria-label="Close Agent Mesh panel"
+          >
+            <X size={14} aria-hidden />
+          </button>
+        </div>
       </div>
 
       {error && !mesh ? (
@@ -1269,218 +1502,488 @@ const SessionsPanel = memo(function SessionsPanel({
         </div>
       ) : summary ? (
         <div className="sessions-summary">
-          <span>
-            <strong>{runningSessions.length}</strong> running / <strong>{meshSessions.length}</strong> total sessions{" "}
-            \u00b7 <strong>{messages.length}</strong> mesh messages
+          <span className="sessions-summary-main">
+            <strong className="sessions-count-live">{runningSessions.length}</strong> running
+            <span className="sessions-summary-sep">/</span>
+            <strong>{meshSessions.length}</strong> total
+            <span className="sessions-summary-sep">·</span>
+            <strong>{messages.length}</strong> {messages.length === 1 ? "message" : "messages"}
           </span>
-          <span>
-            {summary.toolCalls.toLocaleString()} tool calls
-            {summary.toolErrors > 0 ? ` · ${summary.toolErrors} errors` : ""}
-          </span>
-          <span>
-            v{summary.version} · {summary.mode} · up {fmtUptime(summary.uptimeMs)}
+          <span className="sessions-summary-side">
+            {summary.toolCalls > 0 && (
+              <span
+                className="sessions-toolchip"
+                title={summary.toolErrors > 0 ? `${summary.toolErrors} tool errors` : undefined}
+              >
+                {summary.toolCalls.toLocaleString()} calls{summary.toolErrors > 0 ? ` · ${summary.toolErrors} err` : ""}
+              </span>
+            )}
+            <span className="sessions-ver">
+              v{summary.version} · {summary.mode} · up {fmtUptime(summary.uptimeMs)}
+            </span>
           </span>
         </div>
       ) : mesh ? (
         <div className="sessions-summary">
-          <span>
-            <strong>{runningSessions.length}</strong> running / <strong>{meshSessions.length}</strong> total sessions{" "}
-            \u00b7 <strong>{messages.length}</strong> mesh messages
+          <span className="sessions-summary-main">
+            <strong className="sessions-count-live">{runningSessions.length}</strong> running
+            <span className="sessions-summary-sep">/</span>
+            <strong>{meshSessions.length}</strong> total
+            <span className="sessions-summary-sep">·</span>
+            <strong>{messages.length}</strong> {messages.length === 1 ? "message" : "messages"}
           </span>
-          <span className="sessions-hint">(journal mode — no live HTTP server)</span>
+          <span className="sessions-summary-side">
+            <span className="sessions-hint">journal mode</span>
+          </span>
         </div>
       ) : (
         <div className="sessions-summary">
-          <span className="sessions-loading">probing MCP server\u2026</span>
+          <span className="sessions-loading">probing MCP server…</span>
         </div>
       )}
 
-      {meshError && (
-        <div className="sessions-error">
-          <strong>{meshError}</strong>
-          <p>Atlas reads the mesh directly from the workspace journal (no live server needed).</p>
-        </div>
-      )}
-
-      {!error && !meshError && mesh && meshSessions.length === 0 && senders.length === 0 && messages.length === 0 && (
-        <div className="mesh-cta">
-          <MessageSquare size={18} />
-          <p>
-            <strong>No agents on the mesh yet</strong>
-          </p>
-          <p>
-            Start an agent session (opencode or Claude Code) with the Astrivya MCP server enabled — it registers here
-            and agents talk to each other through <code>agent_message</code>.
-          </p>
-          <code>npx @astrivya/mcp-server</code>
-        </div>
-      )}
-
-      {meshSessions.length > 0 && (
-        <div className="sessions-section">
-          <div className="sessions-section-label">Running sessions ({runningSessions.length})</div>
-          <div className="mesh-roster">
-            {runningSessions.map((s) => (
-              <div className="mesh-agent alive" key={s.id}>
-                <span className="mesh-agent-dot" title="process alive" />
-                <span className="mesh-agent-name">{sessionName(s)}</span>
-                <span className="mesh-agent-meta">
-                  {sessionMeta(s)}
-                  {s.agent?.project ? ` \u00b7 ${s.agent.project}` : ""}
-                </span>
-                <span className="mesh-agent-last">{s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"}</span>
-              </div>
-            ))}
-            {runningSessions.length === 0 && <div className="mesh-sessions-none">No running sessions right now.</div>}
+      <div className="sessions-body">
+        {meshError && (
+          <div className="sessions-error">
+            <strong>{meshError}</strong>
+            <p>Atlas reads the mesh directly from the workspace journal (no live server needed).</p>
           </div>
-          {previousSessions.length > 0 && (
-            <button className="mesh-toggle" onClick={() => setShowPrevious((v) => !v)}>
-              {showPrevious ? "Hide" : "Show"} previous sessions ({previousSessions.length})
-            </button>
-          )}
-          {showPrevious &&
-            previousSessions.map((s) => (
-              <div className={`mesh-agent ${s.state === "ended" ? "ended" : "orphan"}`} key={s.id}>
-                <span className="mesh-agent-dot" title={s.state} />
-                <span className="mesh-agent-name">{sessionName(s)}</span>
-                <span className="mesh-agent-meta">
-                  {sessionMeta(s)}
-                  {s.state === "orphan" ? " \u00b7 orphaned" : " \u00b7 ended"}
-                </span>
-                <span className="mesh-agent-last">
-                  {s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"} \u00b7 {s.toolCalls} calls
-                </span>
-              </div>
-            ))}
-        </div>
-      )}
+        )}
 
-      {meshSessions.length === 0 && senders.length > 0 && (
-        <div className="sessions-section">
-          <div className="sessions-section-label">Agents ({senders.length})</div>
-          <div className="mesh-roster">
-            {senders.map((s) => (
-              <div className={`mesh-agent ${s.alive ? "alive" : ""}`} key={s.id}>
-                <span className="mesh-agent-dot" title={s.alive ? "process alive" : "process ended"} />
-                <span className="mesh-agent-name">{agentName(s)}</span>
-                <span className="mesh-agent-meta">
-                  {[s.provider, s.model].filter(Boolean).join(" \u00b7 ")}
-                  {s.project ? ` \u00b7 ${s.project}` : ""}
-                </span>
-                <span className="mesh-agent-last">{s.lastSeen ? fmtAgo(s.lastSeen) : "\u2014"}</span>
-              </div>
-            ))}
+        {!mesh && !error && (
+          <div className="mesh-skeleton" aria-hidden>
+            <div className="mesh-skeleton-row" />
+            <div className="mesh-skeleton-row" />
+            <div className="mesh-skeleton-row" />
           </div>
-        </div>
-      )}
+        )}
 
-      {threadOrder.length > 0 && (
-        <div className="sessions-section">
-          <div className="sessions-section-label">Threads ({threadOrder.length})</div>
-          <div className="mesh-threads">
-            {threadOrder.map(({ key, items }) => {
-              const participants = [...new Set(items.map((m) => senderName(m.from)))];
-              const types = [...new Set(items.map((m) => m.type))];
-              const last = items[items.length - 1];
-              return (
-                <div className="mesh-thread" key={key}>
-                  <div className="mesh-thread-head">
-                    <span className="mesh-thread-id" title={key}>
-                      {key === items[0]?.id && !items[0]?.threadId ? "direct" : key}
-                    </span>
-                    <span className="mesh-thread-meta">
-                      {participants.join(", ")} \u00b7 {items.length} msg \u00b7 {fmtAgo(last.ts)}
-                    </span>
+        {!error && !meshError && mesh && meshSessions.length === 0 && senders.length === 0 && messages.length === 0 && (
+          <div className="mesh-cta">
+            <MessageSquare size={18} />
+            <p>
+              <strong>No agents on the mesh yet</strong>
+            </p>
+            <p>
+              Start an agent session (opencode or Claude Code) with the Astrivya MCP server enabled — it registers here
+              and agents talk to each other through <code>agent_message</code>.
+            </p>
+            <code>npx @astrivya/mcp-server</code>
+          </div>
+        )}
+
+        {meshSessions.length > 0 && (
+          <section className="sessions-section mesh-roster-section" aria-label="Agent sessions">
+            <div className="sessions-section-head">
+              <h2 className="sessions-section-label">
+                Running <span className="sessions-section-count">{runningSessions.length}</span>
+              </h2>
+              <button
+                className="sessions-collapse"
+                onClick={() => setRosterCollapsed((v) => !v)}
+                aria-expanded={!rosterCollapsed}
+                aria-label={rosterCollapsed ? "Expand running sessions" : "Collapse running sessions"}
+              >
+                <ChevronRight size={12} className={rosterCollapsed ? "" : "rotated"} aria-hidden />
+              </button>
+            </div>
+            {rosterCollapsed ? (
+              <div className="mesh-roster-strip">
+                {runningSessions.slice(0, 3).map((s) => (
+                  <span className="mesh-strip-agent" key={s.id} title={sessionTitle(s)}>
+                    <span className="mesh-agent-dot" aria-hidden /> {sessionName(s)}
+                  </span>
+                ))}
+                {runningSessions.length > 3 && <span className="mesh-strip-more">+{runningSessions.length - 3}</span>}
+              </div>
+            ) : (
+              <div className="mesh-roster">
+                {runningSessions.slice(0, 6).map((s) => (
+                  <div className={`mesh-agent alive ${s.legacy ? "legacy" : ""}`} key={s.id} title={sessionTitle(s)}>
+                    <span className="mesh-agent-dot" title="process alive" />
+                    <span className="mesh-agent-name">{sessionName(s)}</span>
+                    <span className="mesh-agent-meta">{sessionMeta(s)}</span>
+                    {s.lastTool && (
+                      <span className="mesh-agent-last" title={`last tool: ${s.lastTool}`}>
+                        ⇨ {s.lastTool}
+                      </span>
+                    )}
                   </div>
-                  {items.slice(-3).map((m) => (
-                    <div className={`mesh-message ${meshTypeClass(m.type)}`} key={m.id}>
-                      <span className="mesh-message-head">
-                        <span className={`mesh-type-badge ${meshTypeClass(m.type)}`}>{m.type}</span>
-                        <span className="mesh-message-from">{senderName(m.from)}</span>
-                        {m.urgency !== "normal" && <span className="mesh-urgency">{m.urgency}</span>}
-                        <span className="mesh-message-ts">{fmtAgo(m.ts)}</span>
-                      </span>
-                      {m.context?.files && m.context.files.length > 0 && (
-                        <span className="mesh-message-files">{m.context.files.slice(0, 4).join(", ")}</span>
-                      )}
-                      <span className="mesh-message-text">
-                        {m.text.length > 240 ? `${m.text.slice(0, 240)}\u2026` : m.text}
-                      </span>
-                    </div>
-                  ))}
-                  {types.length > 1 && <div className="mesh-thread-types">{types.map((t) => `#${t}`).join(" ")}</div>}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {meshSessions.length === 0 && !error && sessions && sessions.length === 0 && senders.length === 0 && (
-        <div className="sessions-empty">No sessions yet — connect an AI agent to see it here.</div>
-      )}
-
-      {meshSessions.length === 0 && active.length > 0 && (
-        <div className="sessions-section">
-          <div className="sessions-section-label">Active</div>
-          {active.map((s) => (
-            <div className="session-card active" key={s.id}>
-              <div className="session-card-row">
-                <span className="session-dot" />
-                <span className="session-id">{shortSid(s.id)}</span>
-                <span className="session-client">{s.client || "unknown client"}</span>
-                <span className="session-uptime">{fmtUptime(Date.now() - s.startedAt)}</span>
+                ))}
+                {runningSessions.length > 6 && (
+                  <button className="mesh-more" onClick={() => setRosterCollapsed(true)}>
+                    Show {runningSessions.length - 6} more
+                  </button>
+                )}
+                {runningSessions.length === 0 && (
+                  <div className="mesh-sessions-none">No running sessions right now.</div>
+                )}
+                {legacyActive.length > 0 && (
+                  <div className="mesh-legacy-note">
+                    <AlertTriangle size={10} aria-hidden />
+                    {legacyActive.length} legacy session{legacyActive.length === 1 ? "" : "s"} active (pre-session-id
+                    rows)
+                  </div>
+                )}
               </div>
-              <div className="session-card-row">
-                <span className="session-meta">
-                  {s.toolCalls} calls · {s.mode}
-                </span>
-                <span className="session-last-tool">{s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"}</span>
+            )}
+
+            {previousSessions.length > 0 && (
+              <div className="mesh-previous">
+                <button
+                  className="mesh-toggle"
+                  onClick={() => {
+                    setShowPrevious((v) => !v);
+                    if (showPrevious) {
+                      setShowAllOrphaned(false);
+                      setShowAllEnded(false);
+                    }
+                  }}
+                  aria-expanded={showPrevious}
+                >
+                  <ChevronRight size={10} className={showPrevious ? "rotated" : ""} aria-hidden />
+                  {showPrevious ? "Hide" : "Show"} previous sessions ({previousSessions.length})
+                </button>
+                {showPrevious && (
+                  <div className="mesh-previous-groups">
+                    {orphaned.length > 0 && (
+                      <div className="mesh-previous-group">
+                        <div className="mesh-previous-group-label">Orphaned ({orphaned.length})</div>
+                        {(showAllOrphaned ? orphaned : orphaned.slice(0, 5)).map((s) => (
+                          <div
+                            className={`mesh-agent orphan ${s.legacy ? "legacy" : ""}`}
+                            key={s.id}
+                            title={sessionTitle(s)}
+                          >
+                            <span className="mesh-agent-dot" title="orphaned" />
+                            <span className="mesh-agent-name">{sessionName(s)}</span>
+                            <span className="mesh-agent-meta">{sessionMeta(s)}</span>
+                            <span className="mesh-agent-last">
+                              {s.lastTool ? `⇨ ${s.lastTool}` : ""}
+                              {s.toolCalls > 0 ? ` · ${s.toolCalls} calls` : ""}
+                            </span>
+                          </div>
+                        ))}
+                        {orphaned.length > 5 && !showAllOrphaned && (
+                          <button className="mesh-more" onClick={() => setShowAllOrphaned(true)}>
+                            Show {orphaned.length - 5} more
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {endedPrev.length > 0 && (
+                      <div className="mesh-previous-group">
+                        <div className="mesh-previous-group-label">Ended ({endedPrev.length})</div>
+                        {(showAllEnded ? endedPrev : endedPrev.slice(0, 5)).map((s) => (
+                          <div
+                            className={`mesh-agent ended ${s.legacy ? "legacy" : ""}`}
+                            key={s.id}
+                            title={sessionTitle(s)}
+                          >
+                            <span className="mesh-agent-dot" title="ended" />
+                            <span className="mesh-agent-name">{sessionName(s)}</span>
+                            <span className="mesh-agent-meta">{sessionMeta(s)}</span>
+                            <span className="mesh-agent-last">
+                              {s.lastTool ? `⇨ ${s.lastTool}` : ""}
+                              {s.toolCalls > 0 ? ` · ${s.toolCalls} calls` : ""}
+                            </span>
+                          </div>
+                        ))}
+                        {endedPrev.length > 5 && !showAllEnded && (
+                          <button className="mesh-more" onClick={() => setShowAllEnded(true)}>
+                            Show {endedPrev.length - 5} more
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {probes.length > 0 && (
+                      <div className="mesh-probe-note">
+                        {probes.length} probe session{probes.length === 1 ? "" : "s"} (curl / PowerShell / browser)
+                        hidden
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
+            )}
+          </section>
+        )}
+
+        {meshSessions.length === 0 && senders.length > 0 && (
+          <section className="sessions-section" aria-label="Agents">
+            <div className="sessions-section-head">
+              <h2 className="sessions-section-label">
+                Agents <span className="sessions-section-count">{senders.length}</span>
+              </h2>
             </div>
-          ))}
-        </div>
-      )}
-
-      {meshSessions.length === 0 && ended.length > 0 && (
-        <div className="sessions-section">
-          <div className="sessions-section-label">Recently ended</div>
-          {ended.slice(0, 5).map((s) => (
-            <div className="session-card ended" key={s.id}>
-              <div className="session-card-row">
-                <span className="session-id">{shortSid(s.id)}</span>
-                <span className="session-client">{s.client || "unknown client"}</span>
-                <span className="session-uptime">{fmtUptime((s.endedAt ?? s.lastActiveAt) - s.startedAt)}</span>
-              </div>
-              <div className="session-card-row">
-                <span className="session-meta">{s.toolCalls} calls · ended</span>
-                <span className="session-last-tool">{s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {toolStats && Object.keys(toolStats).length > 0 && (
-        <div className="sessions-section">
-          <div className="sessions-section-label">Per-tool latency</div>
-          <div className="session-tools">
-            {Object.entries(toolStats)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([name, t]) => (
-                <div className="session-tool-row" key={name}>
-                  <span className="session-tool-name">{name}</span>
-                  <span className="session-tool-calls">
-                    {t.count} call{t.count === 1 ? "" : "s"}
-                    {t.errors > 0 ? ` · ${t.errors} err` : ""}
+            <div className="mesh-roster">
+              {senders.map((s) => (
+                <div className={`mesh-agent ${s.alive ? "alive" : ""}`} key={s.id}>
+                  <span className="mesh-agent-dot" title={s.alive ? "process alive" : "process ended"} />
+                  <span className="mesh-agent-name">{agentName(s)}</span>
+                  <span className="mesh-agent-meta">
+                    {[s.provider, s.model].filter(Boolean).join(" · ")}
+                    {s.project ? ` · ${s.project}` : ""}
                   </span>
-                  <span className="session-tool-lat">
-                    {t.p50Ms != null ? `p50 ${t.p50Ms}ms` : ""}
-                    {t.p95Ms != null ? ` · p95 ${t.p95Ms}ms` : ""}
-                  </span>
+                  {s.lastSeen && (
+                    <span className="mesh-agent-last" title={fullDate(s.lastSeen)}>
+                      {fmtAgo(s.lastSeen)}
+                    </span>
+                  )}
                 </div>
               ))}
+            </div>
+          </section>
+        )}
+
+        {threadOrder.length > 0 && (
+          <section className="sessions-section mesh-threads-section" aria-label="Conversation threads">
+            <div className="sessions-section-head">
+              <h2 className="sessions-section-label">
+                Threads <span className="sessions-section-count">{threadOrder.length}</span>
+              </h2>
+            </div>
+            <div className="mesh-threads">
+              {threadOrder.map(({ key, items }) => {
+                const participants = [...new Set(items.map((m) => senderName(m.from)))];
+                const last = items[items.length - 1];
+                const conflicts = conflictIds(items);
+                const focused = key === focusThread;
+                return (
+                  <article className={`mesh-thread ${focused ? "thread-focused" : ""}`} key={key}>
+                    <div className="mesh-thread-head">
+                      <span className="mesh-thread-id" title={key}>
+                        {key === items[0]?.id && !items[0]?.threadId ? "direct" : key}
+                      </span>
+                      <span className="mesh-thread-meta" title={fullDate(last.ts)}>
+                        {participants.join(", ")} · {items.length} msg · {fmtAgo(last.ts)}
+                      </span>
+                      <button
+                        className="mesh-thread-reply"
+                        onClick={() => setReplyToThread(key)}
+                        title={`Reply in thread ${key}`}
+                        aria-label={`Reply in thread ${key}`}
+                      >
+                        Reply
+                      </button>
+                    </div>
+                    {items.slice(-3).map((m) => (
+                      <div className={`mesh-message ${meshTypeClass(m.type)}`} key={m.id}>
+                        <div className="mesh-message-head">
+                          <span className={`mesh-type-badge ${meshTypeClass(m.type)}`}>{m.type}</span>
+                          <span className="mesh-message-from">{senderName(m.from)}</span>
+                          {m.inReplyTo && (
+                            <span className="mesh-reply-chip" title={`In reply to ${m.inReplyTo}`}>
+                              ↳
+                            </span>
+                          )}
+                          {m.urgency !== "normal" && (
+                            <span className={`mesh-urgency ${m.urgency}`}>
+                              {m.urgency === "high" ? "! " : ""}
+                              {m.urgency}
+                            </span>
+                          )}
+                          {conflicts.has(m.id) && <span className="mesh-conflict-chip">⚠ possible conflict</span>}
+                          <span className="mesh-message-ts" title={fullDate(m.ts)}>
+                            {fmtAgo(m.ts)}
+                          </span>
+                        </div>
+                        {m.context &&
+                          ((m.context.files?.length ?? 0) > 0 ||
+                            m.context.branch ||
+                            m.context.lineRange ||
+                            m.context.topic) && (
+                            <div className="mesh-context-chips">
+                              {(m.context.files ?? []).slice(0, 4).map((f) => (
+                                <span className="mesh-chip file" key={f}>
+                                  {f}
+                                </span>
+                              ))}
+                              {(m.context.files ?? []).length > 4 && (
+                                <span className="mesh-chip more">+{(m.context.files ?? []).length - 4}</span>
+                              )}
+                              {m.context.branch && <span className="mesh-chip branch">#{m.context.branch}</span>}
+                              {m.context.lineRange && <span className="mesh-chip range">@{m.context.lineRange}</span>}
+                              {m.context.topic && <span className="mesh-chip topic">{m.context.topic}</span>}
+                            </div>
+                          )}
+                        <span className="mesh-message-text">{truncated(m) ? `${m.text.slice(0, 240)}…` : m.text}</span>
+                        {truncated(m) && (
+                          <button
+                            className="mesh-message-more"
+                            onClick={() =>
+                              setExpandedIds((prev) => {
+                                const next = new Set(prev);
+                                next.add(m.id);
+                                return next;
+                              })
+                            }
+                          >
+                            Show more
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {meshSessions.length > 0 && threadOrder.length === 0 && (
+          <div className="mesh-sessions-none mesh-no-threads">Agents connected — no conversations yet.</div>
+        )}
+
+        {meshSessions.length === 0 && !error && sessions && sessions.length === 0 && senders.length === 0 && (
+          <div className="sessions-empty">No sessions yet — connect an AI agent to see it here.</div>
+        )}
+
+        {meshSessions.length === 0 && active.length > 0 && (
+          <div className="sessions-section">
+            <div className="sessions-section-label">Active</div>
+            {active.map((s) => (
+              <div className="session-card active" key={s.id}>
+                <div className="session-card-row">
+                  <span className="session-dot" />
+                  <span className="session-id">{shortSid(s.id)}</span>
+                  <span className="session-client">{s.client || "unknown client"}</span>
+                  <span className="session-uptime">{fmtUptime(Date.now() - s.startedAt)}</span>
+                </div>
+                <div className="session-card-row">
+                  <span className="session-meta">
+                    {s.toolCalls} calls · {s.mode}
+                  </span>
+                  <span className="session-last-tool">{s.lastTool ? `⇨ ${s.lastTool}` : ""}</span>
+                </div>
+              </div>
+            ))}
           </div>
+        )}
+
+        {meshSessions.length === 0 && ended.length > 0 && (
+          <div className="sessions-section">
+            <div className="sessions-section-label">Recently ended</div>
+            {ended.slice(0, 5).map((s) => (
+              <div className="session-card ended" key={s.id}>
+                <div className="session-card-row">
+                  <span className="session-id">{shortSid(s.id)}</span>
+                  <span className="session-client">{s.client || "unknown client"}</span>
+                  <span className="session-uptime">{fmtUptime((s.endedAt ?? s.lastActiveAt) - s.startedAt)}</span>
+                </div>
+                <div className="session-card-row">
+                  <span className="session-meta">{s.toolCalls} calls · ended</span>
+                  <span className="session-last-tool">{s.lastTool ? `⇨ ${s.lastTool}` : ""}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {toolStats && Object.keys(toolStats).length > 0 && (
+          <div className="sessions-section">
+            <div className="sessions-section-label">Per-tool latency</div>
+            <div className="session-tools">
+              {Object.entries(toolStats)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([name, t]) => (
+                  <div className="session-tool-row" key={name}>
+                    <span className="session-tool-name">{name}</span>
+                    <span className="session-tool-calls">
+                      {t.count} call{t.count === 1 ? "" : "s"}
+                      {t.errors > 0 ? ` · ${t.errors} err` : ""}
+                    </span>
+                    <span className="session-tool-lat">
+                      {t.p50Ms != null ? `p50 ${t.p50Ms}ms` : ""}
+                      {t.p95Ms != null ? ` · p95 ${t.p95Ms}ms` : ""}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {!meshError && (
+        <div className="mesh-compose">
+          <div className="mesh-compose-head">
+            <span className="sessions-section-label">Compose</span>
+            {replyToThread ? (
+              <span className="mesh-compose-reply">
+                <MessageSquare size={10} aria-hidden /> replying to <code>{replyToThread.slice(0, 24)}</code>
+                <button onClick={() => setReplyToThread(null)} aria-label="Cancel reply" title="New message instead">
+                  ×
+                </button>
+              </span>
+            ) : (
+              <span className="mesh-compose-reply">new message</span>
+            )}
+          </div>
+          <div className="mesh-compose-row">
+            <select
+              className={`mesh-compose-type type-${composeType}`}
+              value={composeType}
+              onChange={(e) => setComposeType(e.target.value)}
+              title="Message type"
+              aria-label="Message type"
+            >
+              {[
+                "general",
+                "question",
+                "review",
+                "blocker",
+                "release",
+                "tag",
+                "ci",
+                "deploy",
+                "vm",
+                "git-push",
+                "code-conflict",
+              ].map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <input
+              ref={composeInputRef}
+              className="mesh-compose-input"
+              value={composeText}
+              onChange={(e) => setComposeText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void sendCompose();
+                }
+              }}
+              placeholder="Post to the mesh…"
+              maxLength={8000}
+              aria-label="Message text"
+            />
+            <button
+              className="mesh-compose-send"
+              disabled={composeStatus === "sending" || !composeText.trim()}
+              onClick={() => void sendCompose()}
+              title="Send (Enter)"
+              aria-label="Send message"
+            >
+              {composeStatus === "sending" ? (
+                <span className="mesh-send-spinner" aria-hidden />
+              ) : composeStatus === "sent" ? (
+                "Sent"
+              ) : (
+                "Send"
+              )}
+            </button>
+          </div>
+          {composeError && (
+            <div className="mesh-compose-error" role="alert">
+              {composeError}
+            </div>
+          )}
+          {composeStatus === "sent" && (
+            <div className="mesh-compose-sent">Posted — agents see it on their next poll.</div>
+          )}
         </div>
       )}
     </div>
