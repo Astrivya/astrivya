@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -7,7 +7,7 @@ import { AkgIndexer, Watcher } from "@astrivya/akg-indexer";
 import { readJournal } from "@astrivya/mcp-server";
 import type { Command } from "commander";
 import { color, error, getErrorMessage, info } from "../lib/output";
-import { isPidAlive } from "./mcp";
+import { isPidAlive, journalSessionRows } from "./mcp";
 
 interface MeshSenderRow {
   id: string;
@@ -21,6 +21,56 @@ interface MeshSenderRow {
   lastSeen: string;
 }
 
+/**
+ * When the MCP HTTP registry (ASTRIVYA_MCP_URL, default localhost:3001) is
+ * unreachable, spawn `mcp-server --sse` as a child of Atlas so the live
+ * sessions registry / status endpoints work out of the box. Local hosts only;
+ * opt out with ASTRIVYA_ATLAS_NO_AUTO_MCP=1 or --no-auto-mcp.
+ */
+function maybeAutoStartMcpServer(mcpBase: string): void {
+  let port = 3001;
+  let host = "localhost";
+  try {
+    const u = new URL(mcpBase);
+    host = u.hostname;
+    port = Number(u.port) || 3001;
+  } catch {
+    // unparseable base — keep defaults
+  }
+  if (host !== "localhost" && host !== "127.0.0.1" && host !== "::1") {
+    info(`MCP server at ${mcpBase} is remote — not auto-starting.`);
+    return;
+  }
+  void (async () => {
+    try {
+      const probe = await fetch(`${mcpBase}/status`, { signal: AbortSignal.timeout(1500) });
+      if (probe.ok) return;
+    } catch {
+      // unreachable — auto-start below
+    }
+    const child = spawn(
+      process.execPath,
+      [process.argv[1], "mcp-server", "--sse", "--port", String(port)],
+      { stdio: "inherit" },
+    );
+    info(
+      `MCP server unreachable at ${mcpBase} — auto-started \`astrivya mcp-server --sse --port ${port}\` (pid ${child.pid}).`,
+    );
+    child.on("error", (err) => error(`Auto-starting MCP server failed: ${getErrorMessage(err)}`));
+    child.on("exit", (code) => info(`Auto-started MCP server exited (code ${code}).`));
+    const killChild = (): void => {
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+    };
+    process.once("SIGINT", killChild);
+    process.once("SIGTERM", killChild);
+    process.once("exit", killChild);
+  })();
+}
+
 export function registerAtlas(program: Command): void {
   program
     .command("serve")
@@ -28,6 +78,7 @@ export function registerAtlas(program: Command): void {
     .description("Start the local Atlas visual intelligence graph explorer")
     .option("-p, --port <port>", "Port to run the server on", "4200")
     .option("-w, --workspace <path>", "Workspace directory", process.cwd())
+    .option("--no-auto-mcp", "Skip auto-starting the MCP HTTP server when it is unreachable")
     .action(async (options) => {
       const port = Number.parseInt(options.port, 10);
       const workspacePath = path.resolve(options.workspace);
@@ -94,7 +145,7 @@ export function registerAtlas(program: Command): void {
                 res.end(
                   JSON.stringify({
                     error: `MCP server unreachable at ${mcpBase} (HTTP ${upstreamRes.status})`,
-                    hint: "Start it with: astrivya mcp-server --http --port 3001",
+                    hint: "Start it with: astrivya mcp-server --sse --port 3001",
                   }),
                 );
                 return;
@@ -107,7 +158,7 @@ export function registerAtlas(program: Command): void {
               res.end(
                 JSON.stringify({
                   error: `MCP server unreachable at ${mcpBase}`,
-                  hint: "Start it with: astrivya mcp-server --http --port 3001",
+                  hint: "Start it with: astrivya mcp-server --sse --port 3001",
                 }),
               );
             }
@@ -178,13 +229,59 @@ export function registerAtlas(program: Command): void {
             }));
             senders.sort((a, b) => String(b.lastSeen ?? "").localeCompare(String(a.lastSeen ?? "")));
             messages.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+
+            // All sessions ever seen in the journal, classified by PID
+            // liveness (active / orphan / ended) — so the panel shows every
+            // current running session even without a live HTTP server.
+            const startById = new Map<string, Record<string, unknown>>();
+            for (const e of events) {
+              if (e.type !== "session_start") continue;
+              const sid = e.session_id ? `sid:${String(e.session_id)}` : `pid:${String(e.pid ?? "?")}`;
+              startById.set(sid, e);
+            }
+            const sessions = journalSessionRows(events).map((r) => {
+              const key = r.legacy ? `pid:${String(r.pid ?? "?")}` : `sid:${r.id}`;
+              const startEv = startById.get(key);
+              const ident = identityById.get(r.id);
+              return {
+                id: r.id,
+                client: (startEv?.client as string | null) ?? r.client,
+                clientVersion: (startEv?.client_version as string | null) ?? null,
+                mode: (startEv?.mode as string | null) ?? null,
+                pid: r.pid,
+                legacy: r.legacy,
+                state: r.state,
+                toolCalls: r.toolCalls,
+                lastTool: r.lastTool,
+                startedAt: startEv ? new Date(String(startEv.ts)).getTime() : null,
+                lastActiveAt: r.lastTs,
+                agent: ident
+                  ? {
+                      name: ident.name,
+                      model: ident.model,
+                      provider: ident.provider,
+                      session: ident.session,
+                      project: ident.project,
+                    }
+                  : null,
+              };
+            });
+            sessions.sort((a, b) => {
+              const rank = { active: 0, orphan: 1, ended: 2 } as const;
+              if (rank[a.state as keyof typeof rank] !== rank[b.state as keyof typeof rank]) {
+                return rank[a.state as keyof typeof rank] - rank[b.state as keyof typeof rank];
+              }
+              return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
+            });
+            const running = sessions.filter((s) => s.state === "active").length;
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(
               JSON.stringify({
                 messages,
                 senders,
+                sessions,
                 count: messages.length,
-                activeAgents: senders.filter((s) => s.alive).length,
+                activeAgents: running,
               }),
             );
           } catch (err) {
@@ -519,6 +616,12 @@ export function registerAtlas(program: Command): void {
           info("File watcher failed to start — graph updates are manual (`astrivya akg reindex`).");
         }
         process.once("SIGINT", () => watcher.stop());
+
+        // Auto-start the MCP HTTP server when unreachable (--no-auto-mcp / env opt-out)
+        if (options.autoMcp !== false && process.env.ASTRIVYA_ATLAS_NO_AUTO_MCP !== "1") {
+          const mcpBase = (process.env.ASTRIVYA_MCP_URL || "http://localhost:3001").replace(/\/+$/, "");
+          maybeAutoStartMcpServer(mcpBase);
+        }
 
         // Auto-open browser
         const cmd =

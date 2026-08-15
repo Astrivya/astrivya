@@ -136,6 +136,8 @@ export interface SessionRow {
   state: "active" | "orphan" | "ended";
   toolCalls: number;
   lastTool: string | null;
+  /** Epoch ms of the most recent journal activity for this session. */
+  lastTs: number;
 }
 
 /**
@@ -203,8 +205,7 @@ export function journalSessionRows(
     .sort((a, b) => {
       if (rank[a.state] !== rank[b.state]) return rank[a.state] - rank[b.state];
       return b.lastTs - a.lastTs;
-    })
-    .map(({ lastTs: _lastTs, ...row }) => row);
+    });
 }
 
 function renderLiveStatus(live: Record<string, unknown>, tokens: Record<string, unknown> | null, link: boolean): void {
@@ -503,7 +504,7 @@ export function registerMcp(program: Command): void {
         const live = await fetchMcpLive("/status");
         if (!live) {
           console.error(color.red(`No MCP HTTP server reachable at ${mcpHttpBase()}.`));
-          console.error(color.dim("  Start one with:  astrivya mcp-server --http --port 3001"));
+          console.error(color.dim("  Start one with:  astrivya mcp-server --sse --port 3001"));
           console.error(color.dim("  Or point ASTRIVYA_MCP_URL at the right endpoint."));
           process.exitCode = 1;
           return;
