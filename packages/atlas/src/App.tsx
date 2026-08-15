@@ -1261,9 +1261,7 @@ const SessionsPanel = memo(function SessionsPanel({
       {error && !mesh ? (
         <div className="sessions-error">
           <strong>{error}</strong>
-          <p>
-            Atlas proxies the MCP server's live registry. Start an HTTP server so agents appear here:
-          </p>
+          <p>Atlas proxies the MCP server's live registry. Start an HTTP server so agents appear here:</p>
           <code>astrivya mcp-server --sse --port 3001</code>
           <p className="sessions-error-hint">
             (or point <code>ASTRIVYA_MCP_URL</code> at the right endpoint, e.g. <code>http://localhost:3001</code>)
@@ -1272,8 +1270,8 @@ const SessionsPanel = memo(function SessionsPanel({
       ) : summary ? (
         <div className="sessions-summary">
           <span>
-            <strong>{runningSessions.length}</strong> running / <strong>{meshSessions.length}</strong> total sessions
-            {" "}\u00b7 <strong>{messages.length}</strong> mesh messages
+            <strong>{runningSessions.length}</strong> running / <strong>{meshSessions.length}</strong> total sessions{" "}
+            \u00b7 <strong>{messages.length}</strong> mesh messages
           </span>
           <span>
             {summary.toolCalls.toLocaleString()} tool calls
@@ -1286,8 +1284,8 @@ const SessionsPanel = memo(function SessionsPanel({
       ) : mesh ? (
         <div className="sessions-summary">
           <span>
-            <strong>{runningSessions.length}</strong> running / <strong>{meshSessions.length}</strong> total sessions
-            {" "}\u00b7 <strong>{messages.length}</strong> mesh messages
+            <strong>{runningSessions.length}</strong> running / <strong>{meshSessions.length}</strong> total sessions{" "}
+            \u00b7 <strong>{messages.length}</strong> mesh messages
           </span>
           <span className="sessions-hint">(journal mode — no live HTTP server)</span>
         </div>
@@ -1333,9 +1331,7 @@ const SessionsPanel = memo(function SessionsPanel({
                 <span className="mesh-agent-last">{s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"}</span>
               </div>
             ))}
-            {runningSessions.length === 0 && (
-              <div className="mesh-sessions-none">No running sessions right now.</div>
-            )}
+            {runningSessions.length === 0 && <div className="mesh-sessions-none">No running sessions right now.</div>}
           </div>
           {previousSessions.length > 0 && (
             <button className="mesh-toggle" onClick={() => setShowPrevious((v) => !v)}>
@@ -1352,8 +1348,7 @@ const SessionsPanel = memo(function SessionsPanel({
                   {s.state === "orphan" ? " \u00b7 orphaned" : " \u00b7 ended"}
                 </span>
                 <span className="mesh-agent-last">
-                  {s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"}
-                  {" "}\u00b7 {s.toolCalls} calls
+                  {s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"} \u00b7 {s.toolCalls} calls
                 </span>
               </div>
             ))}
