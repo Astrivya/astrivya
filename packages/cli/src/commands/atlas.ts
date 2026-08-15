@@ -48,11 +48,9 @@ function maybeAutoStartMcpServer(mcpBase: string): void {
     } catch {
       // unreachable — auto-start below
     }
-    const child = spawn(
-      process.execPath,
-      [process.argv[1], "mcp-server", "--sse", "--port", String(port)],
-      { stdio: "inherit" },
-    );
+    const child = spawn(process.execPath, [process.argv[1], "mcp-server", "--sse", "--port", String(port)], {
+      stdio: "inherit",
+    });
     info(
       `MCP server unreachable at ${mcpBase} — auto-started \`astrivya mcp-server --sse --port ${port}\` (pid ${child.pid}).`,
     );
