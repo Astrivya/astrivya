@@ -321,6 +321,35 @@ export function getClientInfo(sessionId: string): { client: string | null; versi
 }
 
 /**
+ * Attach clientInfo from the `initialize` handshake onto an existing session
+ * AND journal an `agent_identify` update so journal-direct consumers (the
+ * Atlas mesh roster) see the client name. The client name only fills the
+ * identity's name gap — spawn/env layers (e.g. `ASTRIVYA_AGENT_NAME`) keep
+ * priority, matching mergeAgentIdentity's ordering.
+ */
+export function attachClientIdentity(sessionId: string, client: string | null, version: string | null): void {
+  if (!client && !version) return;
+  captureClientInfo(sessionId, client, version);
+  const s = _sessionsMap.get(sessionId);
+  const base = (s?.agent ?? _agentIdentityById.get(sessionId) ?? envAgentIdentity()) as AgentIdentity;
+  if (base.name === client || (!base.name && !client)) return; // name unchanged or nothing to fill
+  const merged = { ...base, name: base.name ?? client };
+  _agentIdentityById.set(sessionId, merged);
+  if (s) s.agent = merged;
+  appendEvent("agent_identify", {
+    session_id: sessionId,
+    name: merged.name,
+    model: merged.model,
+    provider: merged.provider,
+    session: merged.session,
+    cwd: merged.cwd,
+    project: merged.project,
+    changed: true,
+    pid: process.pid,
+  });
+}
+
+/**
  * Attach (or update) an agent's self-registered identity (layer 4 of the
  * merge). Env defaults (layer 3) fill gaps the tool did not override. Appends
  * an `agent_identify` journal event so the Atlas mesh roster can be rebuilt

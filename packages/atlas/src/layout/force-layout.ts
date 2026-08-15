@@ -9,6 +9,8 @@ export interface LayoutNode extends d3.SimulationNodeDatum {
   churnRate?: number;
   lastModified?: number;
   contributorCount?: number;
+  /** top-level module/repo bucket (used for group clustering) */
+  group?: string;
   /** precomputed degree for label priority + hub sizing */
   degree: number;
   fx?: number | null;
@@ -82,6 +84,7 @@ export class ForceLayout {
         churnRate: n.churnRate,
         lastModified: n.lastModified,
         contributorCount: n.contributorCount,
+        group: n.group,
         degree: degreeMap.get(n.id) || 0,
         x: coords ? coords.x : Math.random() * 300 - 150,
         y: coords ? coords.y : Math.random() * 300 - 150,
@@ -123,6 +126,7 @@ export class ForceLayout {
         this.simulation
           .force("collide", d3.forceCollide().radius(22).iterations(1))
           .force("cluster", this.forceCommunityCentroid())
+          .force("group", this.forceGroupCentroid())
           .alpha(0.35)
           .restart();
       }
@@ -353,6 +357,40 @@ export class ForceLayout {
         const c = centroids.get(n.community)!;
         n.vx! += (c.x - (n.x || 0)) * 0.04 * alpha;
         n.vy! += (c.y - (n.y || 0)) * 0.04 * alpha;
+      }
+    }
+    force.initialize = (_: LayoutNode[]) => {
+      nodes = _;
+    };
+    return force;
+  }
+
+  /**
+   * Pull nodes of the same top-level module/repo (`group`) toward each other
+   * so the graph visually separates by repo — a gentle, weaker sibling of the
+   * community centroid force. No-op when no node carries a `group`.
+   */
+  private forceGroupCentroid() {
+    let nodes: LayoutNode[];
+    function force(alpha: number) {
+      const centroids = new Map<string, { x: number; y: number; count: number }>();
+      for (const n of nodes) {
+        if (!n.group) continue;
+        const c = centroids.get(n.group) || { x: 0, y: 0, count: 0 };
+        c.x += n.x || 0;
+        c.y += n.y || 0;
+        c.count++;
+        centroids.set(n.group, c);
+      }
+      for (const c of centroids.values()) {
+        c.x /= c.count;
+        c.y /= c.count;
+      }
+      for (const n of nodes) {
+        if (!n.group || n.fx !== null) continue;
+        const c = centroids.get(n.group)!;
+        n.vx! += (c.x - (n.x || 0)) * 0.025 * alpha;
+        n.vy! += (c.y - (n.y || 0)) * 0.025 * alpha;
       }
     }
     force.initialize = (_: LayoutNode[]) => {

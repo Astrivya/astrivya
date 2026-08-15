@@ -24,6 +24,7 @@ export const PIXI_THEME = {
   node: {
     file: { dim: 0x3b63b8, base: 0x5b8cff, bright: 0x8ab0ff, radius: 8 } as NodeTheme,
     workspace: { dim: 0x565f99, base: 0x7986d6, bright: 0xa5aff0, radius: 6 } as NodeTheme,
+    repo: { dim: 0x7a5cc2, base: 0x9d7bff, bright: 0xc4adff, radius: 6.5 } as NodeTheme,
     folder: { dim: 0x4a4f6d, base: 0x6a7196, bright: 0x99a0c8, radius: 5.5 } as NodeTheme,
     class: { dim: 0x6455b8, base: 0x8f7ef0, bright: 0xbcb0ff, radius: 6.5 } as NodeTheme,
     interface: { dim: 0x2f82ab, base: 0x45b8e8, bright: 0x83d6f8, radius: 6 } as NodeTheme,

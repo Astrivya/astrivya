@@ -9,6 +9,8 @@ export interface AkgNode {
   churnRate?: number;
   lastModified?: number;
   contributorCount?: number;
+  /** top-level module/repo bucket derived server-side (e.g. "packages", "docs") */
+  group?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -22,9 +24,20 @@ export interface AkgEdge {
   extractionMethod?: string;
 }
 
+export interface AkgRepoInfo {
+  id: string;
+  label: string;
+  relPath: string;
+  nodeCount: number;
+}
+
 export interface GraphData {
   nodes: AkgNode[];
   edges: AkgEdge[];
+  /** workspace::root node (or null) — the root of the knowledge graph */
+  workspace: AkgNode | null;
+  /** detected git repositories with node counts */
+  repos: AkgRepoInfo[];
 }
 
 export interface ImpactReport {
