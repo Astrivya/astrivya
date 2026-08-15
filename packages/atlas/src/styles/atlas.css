@@ -1084,6 +1084,10 @@ body {
   color: var(--text-dim);
   font-style: italic;
 }
+.sessions-hint {
+  color: var(--text-dim);
+  font-size: 10px;
+}
 
 .sessions-error {
   padding: 12px 16px;
@@ -1267,6 +1271,36 @@ body {
 }
 .mesh-agent:not(.alive) {
   opacity: 0.5;
+}
+.mesh-agent.ended,
+.mesh-agent.orphan {
+  opacity: 0.55;
+}
+.mesh-agent.ended .mesh-agent-dot {
+  background: #4b4b56;
+}
+.mesh-agent.orphan .mesh-agent-dot {
+  background: #b8860b;
+}
+.mesh-toggle {
+  margin-top: 8px;
+  width: 100%;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed var(--border-subtle);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.mesh-toggle:hover {
+  color: var(--text-primary);
+  border-color: #9d7bff;
+}
+.mesh-sessions-none {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 4px 2px;
 }
 .mesh-agent-dot {
   width: 7px;

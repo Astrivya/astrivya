@@ -171,6 +171,7 @@ function App() {
         setMeshData({
           messages: data.messages ?? [],
           senders: data.senders ?? [],
+          sessions: data.sessions ?? [],
           count: Number(data.count ?? 0),
           activeAgents: Number(data.activeAgents ?? 0),
         });
@@ -1122,9 +1123,31 @@ interface MeshSender {
   alive: boolean;
 }
 
+interface MeshSession {
+  id: string;
+  client: string | null;
+  clientVersion: string | null;
+  mode: string | null;
+  pid: number | null;
+  legacy: boolean;
+  state: "active" | "orphan" | "ended";
+  toolCalls: number;
+  lastTool: string | null;
+  startedAt: number | null;
+  lastActiveAt: number | null;
+  agent: {
+    name: string | null;
+    model: string | null;
+    provider: string | null;
+    session: string | null;
+    project: string | null;
+  } | null;
+}
+
 interface MeshData {
   messages: MeshFeedMessage[];
   senders: MeshSender[];
+  sessions: MeshSession[];
   count: number;
   activeAgents: number;
 }
@@ -1180,6 +1203,10 @@ const SessionsPanel = memo(function SessionsPanel({
   const docked = (mesh?.activeAgents ?? 0) > 0;
   const senders = mesh?.senders ?? [];
   const messages = mesh?.messages ?? [];
+  const [showPrevious, setShowPrevious] = useState(false);
+  const meshSessions = mesh?.sessions ?? [];
+  const runningSessions = meshSessions.filter((s) => s.state === "active");
+  const previousSessions = meshSessions.filter((s) => s.state !== "active");
 
   // Group messages into threads (threadId, falling back to the message id).
   const threadOrder: Array<{ key: string; items: MeshFeedMessage[] }> = [];
@@ -1198,6 +1225,10 @@ const SessionsPanel = memo(function SessionsPanel({
 
   const agentName = (s: MeshSender) => s.name || s.model || s.session || s.id;
   const senderName = (from: string) => senders.find((s) => s.id === from)?.name ?? from;
+  const sessionName = (s: MeshSession) => s.agent?.name || s.client || s.id;
+  const sessionMeta = (s: MeshSession) =>
+    [s.agent?.provider, s.agent?.model].filter(Boolean).join(" \u00b7 ") ||
+    [s.clientVersion, s.mode].filter(Boolean).join(" \u00b7 ");
   const meshTypeClass = (type: string) =>
     type === "code-conflict" || type === "blocker"
       ? "conflict"
@@ -1227,11 +1258,11 @@ const SessionsPanel = memo(function SessionsPanel({
         </button>
       </div>
 
-      {error ? (
+      {error && !mesh ? (
         <div className="sessions-error">
           <strong>{error}</strong>
           <p>Atlas proxies the MCP server's live registry. Start an HTTP server so agents appear here:</p>
-          <code>astrivya mcp-server --http --port 3001</code>
+          <code>astrivya mcp-server --sse --port 3001</code>
           <p className="sessions-error-hint">
             (or point <code>ASTRIVYA_MCP_URL</code> at the right endpoint, e.g. <code>http://localhost:3001</code>)
           </p>
@@ -1239,8 +1270,8 @@ const SessionsPanel = memo(function SessionsPanel({
       ) : summary ? (
         <div className="sessions-summary">
           <span>
-            <strong>{mesh?.activeAgents ?? 0}</strong> agents on mesh \u00b7 <strong>{summary.activeSessions}</strong>{" "}
-            active / <strong>{summary.sessions}</strong> total sessions
+            <strong>{runningSessions.length}</strong> running / <strong>{meshSessions.length}</strong> total sessions{" "}
+            \u00b7 <strong>{messages.length}</strong> mesh messages
           </span>
           <span>
             {summary.toolCalls.toLocaleString()} tool calls
@@ -1250,20 +1281,28 @@ const SessionsPanel = memo(function SessionsPanel({
             v{summary.version} · {summary.mode} · up {fmtUptime(summary.uptimeMs)}
           </span>
         </div>
+      ) : mesh ? (
+        <div className="sessions-summary">
+          <span>
+            <strong>{runningSessions.length}</strong> running / <strong>{meshSessions.length}</strong> total sessions{" "}
+            \u00b7 <strong>{messages.length}</strong> mesh messages
+          </span>
+          <span className="sessions-hint">(journal mode — no live HTTP server)</span>
+        </div>
       ) : (
         <div className="sessions-summary">
           <span className="sessions-loading">probing MCP server\u2026</span>
         </div>
       )}
 
-      {meshError && !error && (
+      {meshError && (
         <div className="sessions-error">
           <strong>{meshError}</strong>
           <p>Atlas reads the mesh directly from the workspace journal (no live server needed).</p>
         </div>
       )}
 
-      {!error && !meshError && mesh && senders.length === 0 && messages.length === 0 && (
+      {!error && !meshError && mesh && meshSessions.length === 0 && senders.length === 0 && messages.length === 0 && (
         <div className="mesh-cta">
           <MessageSquare size={18} />
           <p>
@@ -1277,11 +1316,48 @@ const SessionsPanel = memo(function SessionsPanel({
         </div>
       )}
 
-      {senders.length > 0 && (
+      {meshSessions.length > 0 && (
         <div className="sessions-section">
-          <div className="sessions-section-label">
-            Agents ({senders.filter((s) => s.alive).length} active / {senders.length})
+          <div className="sessions-section-label">Running sessions ({runningSessions.length})</div>
+          <div className="mesh-roster">
+            {runningSessions.map((s) => (
+              <div className="mesh-agent alive" key={s.id}>
+                <span className="mesh-agent-dot" title="process alive" />
+                <span className="mesh-agent-name">{sessionName(s)}</span>
+                <span className="mesh-agent-meta">
+                  {sessionMeta(s)}
+                  {s.agent?.project ? ` \u00b7 ${s.agent.project}` : ""}
+                </span>
+                <span className="mesh-agent-last">{s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"}</span>
+              </div>
+            ))}
+            {runningSessions.length === 0 && <div className="mesh-sessions-none">No running sessions right now.</div>}
           </div>
+          {previousSessions.length > 0 && (
+            <button className="mesh-toggle" onClick={() => setShowPrevious((v) => !v)}>
+              {showPrevious ? "Hide" : "Show"} previous sessions ({previousSessions.length})
+            </button>
+          )}
+          {showPrevious &&
+            previousSessions.map((s) => (
+              <div className={`mesh-agent ${s.state === "ended" ? "ended" : "orphan"}`} key={s.id}>
+                <span className="mesh-agent-dot" title={s.state} />
+                <span className="mesh-agent-name">{sessionName(s)}</span>
+                <span className="mesh-agent-meta">
+                  {sessionMeta(s)}
+                  {s.state === "orphan" ? " \u00b7 orphaned" : " \u00b7 ended"}
+                </span>
+                <span className="mesh-agent-last">
+                  {s.lastTool ? `\u21E8 ${s.lastTool}` : "\u2014"} \u00b7 {s.toolCalls} calls
+                </span>
+              </div>
+            ))}
+        </div>
+      )}
+
+      {meshSessions.length === 0 && senders.length > 0 && (
+        <div className="sessions-section">
+          <div className="sessions-section-label">Agents ({senders.length})</div>
           <div className="mesh-roster">
             {senders.map((s) => (
               <div className={`mesh-agent ${s.alive ? "alive" : ""}`} key={s.id}>
@@ -1340,11 +1416,11 @@ const SessionsPanel = memo(function SessionsPanel({
         </div>
       )}
 
-      {!error && sessions && sessions.length === 0 && senders.length === 0 && (
+      {meshSessions.length === 0 && !error && sessions && sessions.length === 0 && senders.length === 0 && (
         <div className="sessions-empty">No sessions yet — connect an AI agent to see it here.</div>
       )}
 
-      {active.length > 0 && (
+      {meshSessions.length === 0 && active.length > 0 && (
         <div className="sessions-section">
           <div className="sessions-section-label">Active</div>
           {active.map((s) => (
@@ -1366,7 +1442,7 @@ const SessionsPanel = memo(function SessionsPanel({
         </div>
       )}
 
-      {ended.length > 0 && (
+      {meshSessions.length === 0 && ended.length > 0 && (
         <div className="sessions-section">
           <div className="sessions-section-label">Recently ended</div>
           {ended.slice(0, 5).map((s) => (
