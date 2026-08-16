@@ -11,10 +11,7 @@
     },
     "./package.json": "./package.json"
   },
-  "files": [
-    "dist/",
-    "README.md"
-  ],
+  "files": ["dist/", "README.md"],
   "engines": {
     "node": ">=20"
   },
@@ -37,14 +34,7 @@
     "typescript": "^5.0.0",
     "vitest": "^4.1.8"
   },
-  "keywords": [
-    "knowledge-graph",
-    "sqlite",
-    "fts5",
-    "graph-traversal",
-    "impact-analysis",
-    "astrivya"
-  ],
+  "keywords": ["knowledge-graph", "sqlite", "fts5", "graph-traversal", "impact-analysis", "astrivya"],
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"

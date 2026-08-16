@@ -11,11 +11,7 @@
     },
     "./package.json": "./package.json"
   },
-  "files": [
-    "dist/",
-    "opencode-plugin/",
-    "README.md"
-  ],
+  "files": ["dist/", "opencode-plugin/", "README.md"],
   "engines": {
     "node": ">=20"
   },
@@ -37,7 +33,7 @@
     "zod": "^3.24.1"
   },
   "peerDependencies": {
-    "@astrivya/akg-core": "^0.5.0",
+    "@astrivya/akg-core": "^0.6.0",
     "typescript": "^5.0.0"
   },
   "peerDependenciesMeta": {
@@ -52,13 +48,7 @@
     "typescript": "^5.0.0",
     "vitest": "^4.1.8"
   },
-  "keywords": [
-    "mcp",
-    "model-context-protocol",
-    "llm",
-    "knowledge-graph",
-    "astrivya"
-  ],
+  "keywords": ["mcp", "model-context-protocol", "llm", "knowledge-graph", "astrivya"],
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
