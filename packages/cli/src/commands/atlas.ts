@@ -1,4 +1,4 @@
-import { exec, spawn } from "node:child_process";
+import { exec, execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -705,6 +705,187 @@ export function registerAtlas(program: Command): void {
               }));
               res.writeHead(200);
               res.end(JSON.stringify({ points, count: points.length }));
+              return;
+            }
+
+            if (pathname === "/api/akg/decision") {
+              // Provenance bundle for a decision/adr node — "why did we
+              // make this?". Evidence is gathered edge-first (decided /
+              // contributes_to / documents / affects / …), then grounded
+              // temporal fallbacks (files last-modified near the decision
+              // date, git commits in the window, mesh journal messages) so
+              // decision nodes that were logged without graph links still
+              // get an honest, confidence-scored story instead of an empty
+              // drawer. Absence of evidence is reported, never invented.
+              const id = url.searchParams.get("id");
+              if (!id) {
+                res.writeHead(400);
+                res.end(JSON.stringify({ error: "Missing node id" }));
+                return;
+              }
+              const node = storage.getNode(id);
+              if (!node) {
+                res.writeHead(404);
+                res.end(JSON.stringify({ error: "Node not found" }));
+                return;
+              }
+              const isDecision = node.type === "adr" || node.id.startsWith("decision::");
+
+              // Timeline window: ±14 days around the decision, so temporal
+              // evidence is causally plausible, not everything-ever.
+              const WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+              const since = node.createdAt - WINDOW_MS;
+              const until = node.createdAt + WINDOW_MS;
+
+              const neighbors = storage.getNeighbors(id);
+
+              const who: { id: string; label: string; type: string; relation: string }[] = [];
+              for (const n of neighbors) {
+                if (n.direction !== "in") continue;
+                if (n.node.type !== "person" && n.node.type !== "agent") continue;
+                who.push({ id: n.node.id, label: n.node.label, type: n.node.type, relation: n.relation });
+              }
+              if (who.length === 0) {
+                // Authorship proximity: persons who created/own files that
+                // were last modified inside the decision window.
+                const authors = storage.runQuery(
+                  `SELECT DISTINCT p.id, p.label
+                   FROM nodes p
+                   JOIN edges e ON e.source = p.id
+                   JOIN nodes f ON f.id = e.target
+                   WHERE p.type = 'person' AND e.relation IN ('created_by','owns')
+                     AND f.type = 'file' AND f.last_modified BETWEEN ? AND ?
+                   LIMIT 12;`,
+                  [since, until],
+                );
+                for (const a of authors || []) {
+                  who.push({ id: a.id, label: a.label, type: "person", relation: "author-near-date" });
+                }
+              }
+
+              const affectedFiles: { id: string; label: string; path: string | null; relation: string }[] = [];
+              const STORY_FILE_RELATIONS = new Set([
+                "documents",
+                "affects",
+                "implements",
+                "changed",
+                "generated",
+                "references",
+              ]);
+              for (const n of neighbors) {
+                if (n.direction !== "out" || n.node.type !== "file") continue;
+                if (!STORY_FILE_RELATIONS.has(n.relation)) continue;
+                affectedFiles.push({
+                  id: n.node.id,
+                  label: n.node.label,
+                  path: n.node.sourceFile ?? null,
+                  relation: n.relation,
+                });
+              }
+              if (affectedFiles.length === 0) {
+                const files = storage.runQuery(
+                  `SELECT id, label, source_file FROM nodes
+                   WHERE type = 'file' AND last_modified BETWEEN ? AND ?
+                   ORDER BY last_modified DESC LIMIT 15;`,
+                  [since, until],
+                );
+                for (const f of files || []) {
+                  affectedFiles.push({
+                    id: f.id,
+                    label: f.label,
+                    path: f.source_file ?? null,
+                    relation: "modified-near-date",
+                  });
+                }
+              }
+
+              const commits: { hash: string; date: string; author: string; subject: string }[] = [];
+              try {
+                const out = execSync(
+                  `git log --since="${new Date(since).toISOString()}" --until="${new Date(until).toISOString()}" --format=%H|%aI|%an|%s -n 20`,
+                  { cwd: workspacePath, encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] },
+                );
+                for (const line of out.split("\n")) {
+                  const [hash, date, author, ...rest] = line.split("|");
+                  if (!hash) continue;
+                  commits.push({ hash: hash.slice(0, 7), date, author, subject: rest.join("|") });
+                }
+              } catch {
+                // git unavailable or no commits in the window — evidence
+                // gap, not an error
+              }
+
+              const relatedDecisions: { id: string; label: string; createdAt: number; relation: string }[] = [];
+              const related = storage.runQuery(
+                `SELECT id, label, created_at FROM nodes
+                 WHERE (type = 'adr' OR id LIKE 'decision::%') AND id != ?
+                 ORDER BY created_at ASC;`,
+                [id],
+              );
+              for (const r of related || []) {
+                relatedDecisions.push({
+                  id: r.id,
+                  label: r.label,
+                  createdAt: r.created_at,
+                  relation: r.created_at < node.createdAt ? "earlier" : "later",
+                });
+              }
+
+              const tasks: { id: string; label: string; relation: string }[] = [];
+              for (const n of neighbors) {
+                if (n.node.type !== "task") continue;
+                tasks.push({ id: n.node.id, label: n.node.label, relation: n.relation });
+              }
+
+              const conversation: { ts: string; from: string; fromName: string; msgType: string; text: string }[] = [];
+              try {
+                for (const e of readJournal(workspacePath, 5000)) {
+                  if (e.type !== "agent_message") continue;
+                  const ts = new Date(String(e.ts)).getTime();
+                  if (Number.isNaN(ts) || ts < since || ts > until) continue;
+                  conversation.push({
+                    ts: String(e.ts),
+                    from: String(e.from || "?"),
+                    fromName: String(e.from_name || e.from || "?"),
+                    msgType: String(e.msg_type || "general"),
+                    text: String(e.text || ""),
+                  });
+                }
+              } catch {
+                // journal unavailable — evidence gap
+              }
+
+              let confidence = 0;
+              if (node.content) confidence += 0.2;
+              if (who.length > 0) confidence += 0.25;
+              if (affectedFiles.length > 0) confidence += 0.2;
+              if (commits.length > 0) confidence += 0.15;
+              if (conversation.length > 0) confidence += 0.1;
+              if (relatedDecisions.length > 0) confidence += 0.1;
+              confidence = Math.round(Math.min(1, confidence) * 100) / 100;
+
+              res.writeHead(200);
+              res.end(
+                JSON.stringify({
+                  node: {
+                    id: node.id,
+                    label: node.label,
+                    type: node.type,
+                    content: node.content || "",
+                    community: node.community,
+                    createdAt: node.createdAt,
+                    updatedAt: node.updatedAt,
+                  },
+                  isDecision,
+                  who,
+                  affectedFiles,
+                  commits,
+                  relatedDecisions,
+                  tasks,
+                  conversation,
+                  confidence,
+                }),
+              );
               return;
             }
 

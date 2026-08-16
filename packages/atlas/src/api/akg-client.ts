@@ -94,6 +94,69 @@ export interface EmbedMapResponse {
   note?: string;
 }
 
+export interface ProvenanceWho {
+  id: string;
+  label: string;
+  type: string;
+  relation: string;
+}
+
+export interface ProvenanceFile {
+  id: string;
+  label: string;
+  path: string | null;
+  relation: string;
+}
+
+export interface ProvenanceCommit {
+  hash: string;
+  date: string;
+  author: string;
+  subject: string;
+}
+
+export interface ProvenanceDecision {
+  id: string;
+  label: string;
+  createdAt: number;
+  relation: string;
+}
+
+export interface ProvenanceTask {
+  id: string;
+  label: string;
+  relation: string;
+}
+
+export interface ProvenanceMessage {
+  ts: string;
+  from: string;
+  fromName: string;
+  msgType: string;
+  text: string;
+}
+
+export interface DecisionProvenance {
+  node: {
+    id: string;
+    label: string;
+    type: string;
+    content: string;
+    community: number | null;
+    createdAt: number;
+    updatedAt: number;
+  };
+  isDecision: boolean;
+  who: ProvenanceWho[];
+  affectedFiles: ProvenanceFile[];
+  commits: ProvenanceCommit[];
+  relatedDecisions: ProvenanceDecision[];
+  tasks: ProvenanceTask[];
+  conversation: ProvenanceMessage[];
+  /** 0..1 — how much of the provenance is backed by evidence */
+  confidence: number;
+}
+
 // Base URL for API calls.
 // In production (astrivya atlas CLI on port 4200): same-origin, use relative path.
 // In dev (vite on port 5173): point to the CLI atlas server.
@@ -152,6 +215,11 @@ export const akgClient = {
 
   async getEmbedMap(): Promise<EmbedMapResponse> {
     const res = await apiFetch("/embedmap");
+    return res.json();
+  },
+
+  async getDecisionProvenance(id: string): Promise<DecisionProvenance> {
+    const res = await apiFetch(`/decision?id=${encodeURIComponent(id)}`);
     return res.json();
   },
 };

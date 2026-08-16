@@ -42,7 +42,7 @@ export class ForceLayout {
         d3
           .forceLink<LayoutNode, LayoutEdge>()
           .id((d) => d.id)
-          .distance(70)
+          .distance((e) => this.linkDistance(e))
           .iterations(1),
       )
       // Phase A: link + charge only, capped radius for O(n log n)
@@ -53,6 +53,29 @@ export class ForceLayout {
     // Phase-based physics: run sim manually (chunked ticks) instead of the
     // built-in tick loop so physics clock is decoupled from render clock.
     this.simulation.stop();
+  }
+
+  /**
+   * Relation-aware link distance: story edges (decided/affects/implements/
+   * changed) get room to read as legible paths; structural contains edges stay
+   * tight around the tree; references sit between.
+   */
+  private linkDistance(e: LayoutEdge): number {
+    switch (e.relation) {
+      case "contains":
+        return 40;
+      case "references":
+      case "contributes_to":
+        return 60;
+      case "decided":
+      case "affects":
+      case "implements":
+      case "generated":
+      case "changed":
+        return 100;
+      default:
+        return 70;
+    }
   }
 
   isSettled(): boolean {
@@ -127,6 +150,7 @@ export class ForceLayout {
           .force("collide", d3.forceCollide().radius(22).iterations(1))
           .force("cluster", this.forceCommunityCentroid())
           .force("group", this.forceGroupCentroid())
+          .force("chain", this.forceChainStraighten())
           .alpha(0.35)
           .restart();
       }
@@ -187,7 +211,7 @@ export class ForceLayout {
       .force("charge", d3.forceManyBody().strength(-160).distanceMax(300))
       .force("center", d3.forceCenter(0, 0));
     const linkForce = this.simulation.force("link") as d3.ForceLink<LayoutNode, LayoutEdge>;
-    if (linkForce) linkForce.distance(70);
+    if (linkForce) linkForce.distance((e) => this.linkDistance(e));
     this.phase = "unclump";
     this.simulation.alpha(0.8).restart();
     this.settled = false;
@@ -395,6 +419,69 @@ export class ForceLayout {
     }
     force.initialize = (_: LayoutNode[]) => {
       nodes = _;
+    };
+    return force;
+  }
+
+  /**
+   * Chain straightening: pull 2-hop neighbors of a semantic chain toward the
+   * segment between its endpoints so `person → decided → decision → affects →
+   * file` reads as a deliberate path, not an accident of physics. Applies only
+   * to story-relation paths (decided/affects/implements/changed) and is gentle
+   * (0.02) so it never overpowers community/group clustering.
+   */
+  private forceChainStraighten() {
+    let nodes: LayoutNode[];
+    let chains: { a: LayoutNode; b: LayoutNode; mid: LayoutNode }[] = [];
+    const STORY = new Set(["decided", "affects", "implements", "generated", "changed"]);
+
+    function force(alpha: number) {
+      if (chains.length === 0) return;
+      for (const { a, b, mid } of chains) {
+        if (mid.fx !== null) continue;
+        const ax = a.x || 0;
+        const ay = a.y || 0;
+        const bx = b.x || 0;
+        const by = b.y || 0;
+        // Project mid onto segment a→b
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        if (len2 < 1e-6) continue;
+        const t = Math.max(0, Math.min(1, (((mid.x || 0) - ax) * dx + ((mid.y || 0) - ay) * dy) / len2));
+        const px = ax + dx * t;
+        const py = ay + dy * t;
+        mid.vx! += (px - (mid.x || 0)) * 0.02 * alpha;
+        mid.vy! += (py - (mid.y || 0)) * 0.02 * alpha;
+      }
+    }
+    force.initialize = (_: LayoutNode[]) => {
+      nodes = _;
+      chains = [];
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
+      const adj = new Map<string, { to: string; rel: string }[]>();
+      for (const e of this.edges) {
+        const src = typeof e.source === "string" ? e.source : e.source.id;
+        const tgt = typeof e.target === "string" ? e.target : e.target.id;
+        if (!STORY.has(e.relation)) continue;
+        if (!adj.has(src)) adj.set(src, []);
+        if (!adj.has(tgt)) adj.set(tgt, []);
+        adj.get(src)!.push({ to: tgt, rel: e.relation });
+        adj.get(tgt)!.push({ to: src, rel: e.relation });
+      }
+      // For every 2-path a→m→b where a→m and m→b are both story edges, collect
+      // the chain so the middle node gets pulled onto the a→b segment.
+      for (const [midId, nbrs] of adj) {
+        const mid = nodeById.get(midId);
+        if (!mid || nbrs.length < 2) continue;
+        for (let i = 0; i < nbrs.length; i++) {
+          for (let j = i + 1; j < nbrs.length; j++) {
+            const a = nodeById.get(nbrs[i].to);
+            const b = nodeById.get(nbrs[j].to);
+            if (a && b) chains.push({ a, b, mid });
+          }
+        }
+      }
     };
     return force;
   }
