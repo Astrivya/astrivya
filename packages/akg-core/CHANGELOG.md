@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/Astrivya/astrivya/compare/akg-core-v0.5.0...akg-core-v0.6.0) (2026-08-16)
+
+
+### Features
+
+* **mesh:** Agent Mesh v1 - A2A identity + typed messaging + Atlas panel ([6f55bd2](https://github.com/Astrivya/astrivya/commit/6f55bd224ecb2220abd5ef678b9ffa77f9013e45))
+* **mesh:** agent-to-agent mesh with identity, typed messages, Atlas panel ([5857cdb](https://github.com/Astrivya/astrivya/commit/5857cdba4c653e0622e6cb28988cc555d755b62b))
+
 ## [0.5.0](https://github.com/Astrivya/astrivya/compare/akg-core-v0.4.0...akg-core-v0.5.0) (2026-08-14)
 
 ### Features
