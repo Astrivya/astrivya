@@ -5,6 +5,7 @@ import {
   Compass,
   Crosshair,
   GitBranch,
+  Globe,
   HelpCircle,
   Info,
   Layers,
@@ -25,6 +26,7 @@ import {
   type AkgNode,
   type AkgRepoInfo,
   type AkgStats,
+  type CommunityInfo,
   type DecisionProvenance,
   type EmbedPoint,
   type GraphData,
@@ -37,6 +39,7 @@ import astrivyaLogo from "./assets/astrivya-logo.webp?inline";
 import { ProvenancePanel } from "./components/ProvenancePanel";
 import { ForceLayout } from "./layout/force-layout";
 import { PixiRenderer } from "./renderer/pixi-renderer";
+import { PIXI_THEME } from "./renderer/theme";
 
 const KNOWLEDGE_LAYERS = [
   { name: "Repos & Structure", types: ["workspace", "repo", "folder"], color: "#9d7bff" },
@@ -60,7 +63,7 @@ function App() {
 
   // Data State
   const [stats, setStats] = useState<AkgStats | null>(null);
-  const [communities, setCommunities] = useState<{ id: number; label: string; nodeCount: number }[]>([]);
+  const [communities, setCommunities] = useState<CommunityInfo[]>([]);
   const [visibleTypes, setVisibleTypes] = useState<Set<string>>(new Set(ALL_TYPES));
   const [workspaceRoot, setWorkspaceRoot] = useState<AkgNode | null>(null);
   const [repos, setRepos] = useState<AkgRepoInfo[]>([]);
@@ -70,7 +73,9 @@ function App() {
   const [neighbors, setNeighbors] = useState<{ node: AkgNode; relation: string; direction: "in" | "out" }[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [suggestions, setSuggestions] = useState<AkgNode[]>([]);
-  const [visualMode, setVisualMode] = useState<"explore" | "focus" | "impact" | "path" | "topo" | "embed">("explore");
+  const [visualMode, setVisualMode] = useState<"explore" | "focus" | "impact" | "path" | "topo" | "embed" | "overview">(
+    "explore",
+  );
 
   // Drawers
   const [layersOpen, setLayersOpen] = useState(true);
@@ -128,6 +133,7 @@ function App() {
   const triggerPathTraceRef = useRef<(from: string, to: string) => void>(() => {});
   const triggerTopoModeRef = useRef<() => void>(() => {});
   const triggerEmbedModeRef = useRef<() => void>(() => {});
+  const triggerOverviewModeRef = useRef<() => void>(() => {});
 
   handleNodeSelectionRef.current = handleNodeSelection;
   handleToggleLayerRef.current = handleToggleLayer;
@@ -137,6 +143,7 @@ function App() {
   triggerPathTraceRef.current = triggerPathTrace;
   triggerTopoModeRef.current = triggerTopoMode;
   triggerEmbedModeRef.current = triggerEmbedMode;
+  triggerOverviewModeRef.current = triggerOverviewMode;
 
   // Poll the MCP server registry every 3s while the Sessions drawer is open.
   useEffect(() => {
@@ -268,6 +275,11 @@ function App() {
             handleNodeSelectionRef.current(nodeId);
           });
 
+          // Rung 0 overview: supernode click → drill into the community
+          renderer.onSupernodeSelect((communityId) => {
+            handleSupernodeSelect(communityId);
+          });
+
           // Drive physics + render on the Pixi ticker (chunked ticks, decoupled
           // from React). setSettled fires only on transition to avoid re-renders.
           const tick = () => {
@@ -369,6 +381,9 @@ function App() {
           setTopoResult(null);
           setEmbedMap(null);
           setVisualMode("explore");
+          if (rendererRef.current?.getMode() === "overview") {
+            rendererRef.current.setVisualMode("explore");
+          }
           rendererRef.current?.setSelection(null);
         }
       }
@@ -614,8 +629,43 @@ function App() {
     }
   }
 
+  /** Rung 0 overview: aggregate the whole graph into community supernodes. */
+  async function triggerOverviewMode() {
+    setVisualMode("overview");
+    try {
+      const commList = await akgClient.getCommunities();
+      setCommunities(commList || []);
+      if (layoutRef.current && rendererRef.current) {
+        rendererRef.current.setVisualMode("overview", { communities: commList || [] });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  /** Supernode click → drill into that community: focus its top member. */
+  function handleSupernodeSelect(communityId: number) {
+    const member = graphRef.current?.nodes.find((n) => n.community === communityId);
+    if (!member || !layoutRef.current || !rendererRef.current) return;
+    setVisualMode("explore");
+    rendererRef.current.setVisualMode("explore");
+    const priority = (PIXI_THEME.label.typePriority as Record<string, number>) ?? {};
+    let best = member;
+    let bestScore = -1;
+    for (const n of graphRef.current!.nodes) {
+      if (n.community !== communityId) continue;
+      const degree = (n as unknown as { degree?: number }).degree || 0;
+      const score = (priority[n.type] ?? 1) * (1 + degree / 10);
+      if (score > bestScore) {
+        bestScore = score;
+        best = n;
+      }
+    }
+    handleNodeSelection(best.id);
+  }
+
   // Clean up old path/impact state when switching back to explore
-  const handleModeBtn = (mode: "explore" | "focus" | "impact" | "path" | "topo" | "embed") => {
+  const handleModeBtn = (mode: "explore" | "focus" | "impact" | "path" | "topo" | "embed" | "overview") => {
     if (mode === "explore") {
       resetToExploreRef.current();
     } else if (mode === "focus" && selectedNode) {
@@ -626,6 +676,8 @@ function App() {
       triggerTopoModeRef.current();
     } else if (mode === "embed") {
       triggerEmbedModeRef.current();
+    } else if (mode === "overview") {
+      triggerOverviewModeRef.current();
     }
   };
 
@@ -670,6 +722,12 @@ function App() {
       </button>
       <button className={`mode-chip ${visualMode === "embed" ? "active" : ""}`} onClick={() => handleModeBtn("embed")}>
         <Orbit size={13} /> Embed
+      </button>
+      <button
+        className={`mode-chip ${visualMode === "overview" ? "active" : ""}`}
+        onClick={() => handleModeBtn("overview")}
+      >
+        <Globe size={13} /> Overview
       </button>
     </div>
   );
@@ -716,8 +774,20 @@ function App() {
         </div>
       );
     }
+    if (visualMode === "overview") {
+      const total = communities.reduce((acc, c) => acc + c.nodeCount, 0);
+      return (
+        <div className="mode-card">
+          <div className="mode-card-label">Community Overview</div>
+          <div className="mode-card-score">
+            {communities.length} <span>supernodes</span>
+          </div>
+          <p>{total.toLocaleString()} nodes aggregated by community — click a supernode to drill in.</p>
+        </div>
+      );
+    }
     return null;
-  }, [visualMode, impactReport, pathResult, topoResult]);
+  }, [visualMode, impactReport, pathResult, topoResult, communities]);
 
   const layersPanel = (
     <aside className={`atlas-drawer left ${layersOpen ? "open" : ""}`}>

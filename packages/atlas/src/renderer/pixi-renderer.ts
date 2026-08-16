@@ -1,4 +1,5 @@
 import * as PIXI from "pixi.js";
+import type { CommunityInfo } from "../api/akg-client";
 import type { LayoutEdge, LayoutNode } from "../layout/force-layout";
 import { bakeShapeTextures } from "./shapes";
 import { type NodeShape, PIXI_THEME, getEdgeSemantics, getLodMinZoom, getNodeTheme } from "./theme";
@@ -33,6 +34,7 @@ export class PixiRenderer {
   private nodeSprites: Map<string, PIXI.Sprite> = new Map();
   private nodeData: Map<string, { x: number; y: number; radius: number }> = new Map();
   private nodesArray: LayoutNode[] = [];
+  private edgesArray: LayoutEdge[] = [];
 
   private edgesGraphics!: PIXI.Graphics;
   private ringGraphics!: PIXI.Graphics;
@@ -70,13 +72,26 @@ export class PixiRenderer {
   private onNodeSelectCallback?: (id: string) => void;
 
   // Mode visual state
-  private activeMode: "explore" | "focus" | "impact" | "path" | "topo" = "explore";
+  private activeMode: "explore" | "focus" | "impact" | "path" | "topo" | "overview" = "explore";
   private highlightedNodeIds: Set<string> = new Set();
   private pathNodeIds: string[] = [];
   private directImpactIds: Set<string> = new Set();
   private transitiveImpactIds: Set<string> = new Set();
   private topoDepths = new Map<string, number>();
   private topoCycleIds = new Set<string>();
+
+  // Overview (rung 0) supernode layer: community → { centroid, radius, label }
+  private supernodeContainer!: PIXI.Container;
+  private supernodeGraphics!: PIXI.Graphics;
+  private supernodeLabels: Map<number, PIXI.Sprite> = new Map();
+  private supernodes: Map<
+    number,
+    { community: number; label: string; count: number; dominantType: string; x: number; y: number; radius: number }
+  > = new Map();
+  private communityInfo: CommunityInfo[] = [];
+  private onSupernodeSelectCallback?: (communityId: number) => void;
+  private hoveredSupernode: number | null = null;
+  private nodeCommunity: Map<string, number> = new Map();
 
   private needsEdgeRedraw = true;
   private lastSettled = false;
@@ -134,6 +149,13 @@ export class PixiRenderer {
     this.labelContainer.zIndex = 3;
     this.viewport.addChild(this.labelContainer);
 
+    // Supernode layer sits above ring, below labels: disc graphics + labels.
+    this.supernodeContainer = new PIXI.Container();
+    this.supernodeContainer.zIndex = 2.5;
+    this.viewport.addChild(this.supernodeContainer);
+    this.supernodeGraphics = new PIXI.Graphics();
+    this.supernodeContainer.addChild(this.supernodeGraphics);
+
     this.setupViewportEvents();
   }
 
@@ -157,6 +179,16 @@ export class PixiRenderer {
     const canvas = this.app.canvas;
 
     canvas.addEventListener("pointerdown", (e) => {
+      if (this.activeMode === "overview") {
+        const rect = this.container.getBoundingClientRect();
+        const wx = (e.clientX - rect.left - this.viewport.position.x) / this.zoom;
+        const wy = (e.clientY - rect.top - this.viewport.position.y) / this.zoom;
+        const hit = this.pickSupernode(wx, wy);
+        if (hit !== null) {
+          if (this.onSupernodeSelectCallback) this.onSupernodeSelectCallback(hit);
+          return;
+        }
+      }
       if (this.hoveredNodeId) {
         if (this.onNodeSelectCallback) this.onNodeSelectCallback(this.hoveredNodeId);
         return;
@@ -221,6 +253,17 @@ export class PixiRenderer {
     // Pick node under cursor via spatial hash
     const wx = (sx - this.viewport.position.x) / this.zoom;
     const wy = (sy - this.viewport.position.y) / this.zoom;
+
+    if (this.activeMode === "overview") {
+      const hitSuper = this.pickSupernode(wx, wy);
+      if (hitSuper !== this.hoveredSupernode) {
+        this.hoveredSupernode = hitSuper;
+        this.app.canvas.style.cursor = hitSuper !== null ? "pointer" : "grab";
+        this.redrawSupernodes();
+      }
+      return;
+    }
+
     const hit = this.pickNode(wx, wy);
     if (hit !== this.hoveredNodeId) {
       this.hoveredNodeId = hit;
@@ -289,7 +332,7 @@ export class PixiRenderer {
   }
 
   setVisualMode(
-    mode: "explore" | "focus" | "impact" | "path" | "topo",
+    mode: "explore" | "focus" | "impact" | "path" | "topo" | "overview",
     opts?: {
       highlightIds?: string[];
       pathIds?: string[];
@@ -297,8 +340,16 @@ export class PixiRenderer {
       transitiveImpactIds?: string[];
       topoDepths?: { nodeId: string; depth: number }[];
       topoCycleIds?: string[];
+      communities?: CommunityInfo[];
     },
   ): void {
+    if (mode === "overview") {
+      this.buildSupernodes(opts?.communities || []);
+      this.applyNodeState();
+      this.needsEdgeRedraw = true;
+      return;
+    }
+    this.clearSupernodes();
     this.activeMode = mode;
     this.highlightedNodeIds = new Set(opts?.highlightIds || []);
     this.pathNodeIds = opts?.pathIds || [];
@@ -312,6 +363,14 @@ export class PixiRenderer {
     this.computeExploreSet();
   }
 
+  onSupernodeSelect(callback: (communityId: number) => void): void {
+    this.onSupernodeSelectCallback = callback;
+  }
+
+  getMode(): "explore" | "focus" | "impact" | "path" | "topo" | "overview" {
+    return this.activeMode;
+  }
+
   updateGraph(nodes: LayoutNode[], edges: LayoutEdge[], visibleTypes: Set<string>): void {
     // Dispose old sprites
     for (const sprite of this.nodeSprites.values()) {
@@ -321,6 +380,7 @@ export class PixiRenderer {
     const prevIds = new Set(this.nodeData.keys());
     this.nodeData.clear();
     this.nodesArray = nodes;
+    this.edgesArray = edges;
     this.labelSprites.forEach((s) => s.destroy());
     this.labelSprites.clear();
     this.labelTextureCache.forEach((t) => t.destroy());
@@ -351,11 +411,15 @@ export class PixiRenderer {
 
     this.rebuildSpatial();
     this.needsEdgeRedraw = true;
-    this.drawEdges(nodes, edges, visibleTypes);
+    if (this.activeMode !== "overview") this.drawEdges(nodes, edges, visibleTypes);
     this.lastSettled = false;
     this.lastLabelBand = -1;
     this.applyNodeState();
     this.computeExploreSet();
+    // Live graph updates while in overview → rebuild supernode layer.
+    if (this.activeMode === "overview" && this.communityInfo.length > 0) {
+      this.buildSupernodes(this.communityInfo);
+    }
   }
 
   /** Rank nodes by importance (type priority × degree) and keep only the top
@@ -377,6 +441,153 @@ export class PixiRenderer {
     if (this.selectedNodeId) set.add(this.selectedNodeId);
     if (this.hoveredNodeId) set.add(this.hoveredNodeId);
     this.exploreSet = set;
+  }
+
+  /** Build the supernode layer for overview mode: one disc per community at
+   *  the member centroid, sized by sqrt(count), tinted by dominant type. */
+  private buildSupernodes(communities: CommunityInfo[]): void {
+    this.clearSupernodes();
+    this.activeMode = "overview";
+    this.communityInfo = communities;
+    const labelCache = this.labelTextureCache;
+
+    this.nodeCommunity.clear();
+    for (const n of this.nodesArray) {
+      if (n.community !== undefined && n.community !== null) this.nodeCommunity.set(n.id, n.community);
+    }
+
+    // Only the largest communities get labels — a 1-node "community" is just a
+    // dot, not a constellation.
+    const labeled = new Set(
+      [...communities]
+        .sort((a, b) => b.nodeCount - a.nodeCount)
+        .slice(0, PIXI_THEME.supernode.labelCap)
+        .map((c) => c.id),
+    );
+
+    for (const info of communities) {
+      const members = this.nodesArray.filter((n) => n.community === info.id);
+      if (members.length === 0) continue;
+      let sx = 0;
+      let sy = 0;
+      for (const m of members) {
+        const d = this.nodeData.get(m.id);
+        sx += d ? d.x : m.x || 0;
+        sy += d ? d.y : m.y || 0;
+      }
+      const radius = Math.min(
+        PIXI_THEME.supernode.maxR,
+        PIXI_THEME.supernode.baseR * Math.sqrt(Math.max(info.nodeCount, members.length)),
+      );
+      this.supernodes.set(info.id, {
+        community: info.id,
+        label: info.label,
+        count: info.nodeCount,
+        dominantType: info.dominantType,
+        x: sx / members.length,
+        y: sy / members.length,
+        radius,
+      });
+
+      const text = `${info.label} · ${info.nodeCount}`;
+      let texture: PIXI.Texture | undefined = undefined;
+      if (labeled.has(info.id)) {
+        texture = labelCache.get(text);
+        if (!texture) {
+          const t = new PIXI.Text({
+            text,
+            style: {
+              fontFamily: PIXI_THEME.label.font,
+              fontSize: 11,
+              fontWeight: "600",
+              fill: 0xe6e6eb,
+              dropShadow: { color: 0x000000, blur: 4, distance: 0, alpha: 0.9 },
+            },
+          });
+          texture = this.app.renderer.generateTexture(t);
+          labelCache.set(text, texture);
+          t.destroy();
+        }
+      }
+      if (texture) {
+        const sprite = new PIXI.Sprite(texture);
+        sprite.anchor.set(0.5, 0);
+        this.supernodeContainer.addChild(sprite);
+        this.supernodeLabels.set(info.id, sprite);
+      }
+    }
+    this.redrawSupernodes();
+  }
+
+  private clearSupernodes(): void {
+    for (const s of this.supernodeLabels.values()) s.destroy();
+    this.supernodeLabels.clear();
+    this.supernodes.clear();
+    this.nodeCommunity.clear();
+    this.hoveredSupernode = null;
+    this.supernodeGraphics.clear();
+  }
+
+  /** Discs + bundle edges + label positions. Called on build and on camera/
+   *  layout settle so supernodes track their member centroids. */
+  private redrawSupernodes(): void {
+    const g = this.supernodeGraphics;
+    g.clear();
+
+    // Cross-community edges collapse into thin bundles between centroids.
+    const byPair = new Map<string, { count: number }>();
+    for (const e of this.edgesArray) {
+      const srcId = typeof e.source === "string" ? e.source : (e.source as LayoutNode).id;
+      const tgtId = typeof e.target === "string" ? e.target : (e.target as LayoutNode).id;
+      const s = this.supernodes.get(this.nodeCommunity.get(srcId) ?? -1);
+      const t = this.supernodes.get(this.nodeCommunity.get(tgtId) ?? -1);
+      if (!s || !t || s.community === t.community) continue;
+      const key = s.community < t.community ? `${s.community}|${t.community}` : `${t.community}|${s.community}`;
+      const pair = byPair.get(key) || { count: 0 };
+      pair.count++;
+      byPair.set(key, pair);
+    }
+    for (const [key, pair] of byPair.entries()) {
+      const [a, b] = key.split("|").map(Number);
+      const sa = this.supernodes.get(a);
+      const sb = this.supernodes.get(b);
+      if (!sa || !sb) continue;
+      g.moveTo(sa.x, sa.y)
+        .lineTo(sb.x, sb.y)
+        .stroke({
+          color: 0x3a3a44,
+          width: PIXI_THEME.supernode.bundleWidth,
+          alpha: Math.min(0.14, PIXI_THEME.supernode.bundleAlpha * (1 + Math.log10(pair.count + 1))),
+        });
+    }
+
+    for (const [id, sn] of this.supernodes.entries()) {
+      const theme = getNodeTheme(sn.dominantType);
+      const isHover = this.hoveredSupernode === id;
+      g.circle(sn.x, sn.y, sn.radius);
+      g.fill({
+        color: isHover ? theme.bright : theme.base,
+        alpha: isHover ? PIXI_THEME.supernode.hoverAlpha : PIXI_THEME.supernode.alpha,
+      });
+      if (isHover) {
+        g.circle(sn.x, sn.y, sn.radius);
+        g.stroke({ color: theme.bright, width: 1.5, alpha: 0.8 });
+      }
+      const label = this.supernodeLabels.get(id);
+      if (label) label.position.set(sn.x, sn.y + sn.radius + 5);
+    }
+  }
+
+  private pickSupernode(wx: number, wy: number): number | null {
+    let best: { id: number; d2: number; r: number } | null = null;
+    for (const [id, sn] of this.supernodes.entries()) {
+      const dx = sn.x - wx;
+      const dy = sn.y - wy;
+      const d2 = dx * dx + dy * dy;
+      const hitR = Math.max(sn.radius, PIXI_THEME.hitRadius);
+      if (d2 <= hitR * hitR && (!best || d2 < best.d2)) best = { id, d2, r: hitR };
+    }
+    return best ? best.id : null;
   }
 
   /** Draw a tapered story edge as a filled quad (1px → ~2px) toward the target. */
@@ -550,9 +761,11 @@ export class PixiRenderer {
 
   /** Per-frame: move sprites only (no geometry rebuild). Rebuild spatial hash lazily. */
   updateNodesPositions(nodes: LayoutNode[], edges: LayoutEdge[], visibleTypes: Set<string>, settled = false): void {
+    const inOverview = this.activeMode === "overview";
+
     // During animation, positions move every tick → redraw edges + rebuild spatial.
     if (!settled || this.needsEdgeRedraw) {
-      this.drawEdges(nodes, edges, visibleTypes);
+      if (!inOverview) this.drawEdges(nodes, edges, visibleTypes);
       if (settled) this.needsEdgeRedraw = false;
     }
 
@@ -579,13 +792,14 @@ export class PixiRenderer {
 
       // LOD tier: hide detail types (functions, agent messages) when zoomed out.
       // Explore mode additionally caps to the importance set so the overview
-      // stays clean at thousands of nodes.
+      // stays clean at thousands of nodes. Overview mode replaces all node
+      // sprites with the supernode layer.
       const onScreen = nx >= minWx && nx <= maxWx && ny >= minWy && ny <= maxWy;
       const inExploreSet =
         this.activeMode === "explore"
           ? this.exploreSet.has(n.id) || n.id === this.hoveredNodeId || n.id === this.selectedNodeId
           : true;
-      sprite.visible = onScreen && zoom >= getLodMinZoom(n.type) && inExploreSet;
+      sprite.visible = !inOverview && onScreen && zoom >= getLodMinZoom(n.type) && inExploreSet;
 
       // Spawn-at-parent reveal: scale 0→1 with ease-out-back over dur.expand
       const spawnStart = this.spawnTimes.get(n.id);
@@ -608,7 +822,30 @@ export class PixiRenderer {
     }
     this.lastSettled = settled;
 
-    if (!settled) {
+    if (inOverview) {
+      // Keep supernode discs tracking member centroids while layout animates
+      // (skipped once settled — discs are static between graph changes).
+      if (!settled || this.lastSettled !== settled) {
+        const sums = new Map<number, { x: number; y: number; count: number }>();
+        for (const n of this.nodesArray) {
+          if (n.community === undefined || n.community === null) continue;
+          const d = this.nodeData.get(n.id);
+          const acc = sums.get(n.community) || { x: 0, y: 0, count: 0 };
+          acc.x += d ? d.x : n.x || 0;
+          acc.y += d ? d.y : n.y || 0;
+          acc.count++;
+          sums.set(n.community, acc);
+        }
+        for (const [id, sn] of this.supernodes.entries()) {
+          const acc = sums.get(id);
+          if (acc && acc.count > 0) {
+            sn.x = acc.x / acc.count;
+            sn.y = acc.y / acc.count;
+          }
+        }
+        this.redrawSupernodes();
+      }
+    } else if (!settled) {
       this.applyNodeState();
     }
 
@@ -647,6 +884,11 @@ export class PixiRenderer {
 
   /** Position the single halo + ring sprite at the hovered/selected node. */
   private updateRing(): void {
+    if (this.activeMode === "overview") {
+      this.haloSprite.visible = false;
+      this.ringGraphics.clear();
+      return;
+    }
     const id = this.hoveredNodeId || this.selectedNodeId;
     const sprite = id ? this.nodeSprites.get(id) : null;
     if (!id || !sprite) {
@@ -698,6 +940,7 @@ export class PixiRenderer {
   }
 
   private refreshLabels(): void {
+    if (this.activeMode === "overview") return;
     for (const s of this.labelSprites.values()) s.destroy();
     this.labelSprites.clear();
 
@@ -869,6 +1112,7 @@ export class PixiRenderer {
   dispose(): void {
     if (this.app) {
       window.removeEventListener("pointermove", this.onPointerMove);
+      this.clearSupernodes();
       this.app.destroy(true, { children: true, texture: true });
     }
   }
