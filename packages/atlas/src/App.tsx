@@ -25,6 +25,7 @@ import {
   type AkgNode,
   type AkgRepoInfo,
   type AkgStats,
+  type DecisionProvenance,
   type EmbedPoint,
   type GraphData,
   type ImpactReport,
@@ -33,6 +34,7 @@ import {
   akgClient,
 } from "./api/akg-client";
 import astrivyaLogo from "./assets/astrivya-logo.webp?inline";
+import { ProvenancePanel } from "./components/ProvenancePanel";
 import { ForceLayout } from "./layout/force-layout";
 import { PixiRenderer } from "./renderer/pixi-renderer";
 
@@ -73,6 +75,9 @@ function App() {
   // Drawers
   const [layersOpen, setLayersOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [provenanceTab, setProvenanceTab] = useState<"inspector" | "why">("inspector");
+  const [provenance, setProvenance] = useState<DecisionProvenance | null>(null);
+  const [provenanceLoading, setProvenanceLoading] = useState(false);
 
   // MCP Sessions drawer
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -107,6 +112,9 @@ function App() {
   const [settled, setSettled] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const graphRef = useRef<GraphData>({ nodes: [], edges: [], workspace: null, repos: [] });
+
+  // Bloom-style traversal history: clicked/expanded nodes become crumbs
+  const [breadcrumbs, setBreadcrumbs] = useState<{ id: string; label: string; type: string }[]>([]);
 
   const visibleTypesRef = useRef(visibleTypes);
   visibleTypesRef.current = visibleTypes;
@@ -394,6 +402,34 @@ function App() {
     }
   }
 
+  /** Merge a fetched subgraph into the current graph (progressive disclosure).
+   *  The graph grows as you explore — it never re-renders the whole world. */
+  function mergeGraph(extra: GraphData) {
+    const current = graphRef.current;
+    const nodesById = new Map(current.nodes.map((n) => [n.id, n]));
+    const edgesKey = new Set(current.edges.map((e) => `${e.source}\u0001${e.target}\u0001${e.relation}`));
+    for (const n of extra.nodes) if (!nodesById.has(n.id)) nodesById.set(n.id, n);
+    const edges = [...current.edges];
+    for (const e of extra.edges) {
+      const key = `${e.source}\u0001${e.target}\u0001${e.relation}`;
+      if (!edgesKey.has(key)) {
+        edgesKey.add(key);
+        edges.push(e);
+      }
+    }
+    const merged = { ...current, nodes: [...nodesById.values()], edges };
+    graphRef.current = merged;
+    if (layoutRef.current && rendererRef.current) {
+      layoutRef.current.setGraph(merged.nodes, merged.edges);
+      rendererRef.current.updateGraph(
+        layoutRef.current.getNodes(),
+        layoutRef.current.getEdges(),
+        visibleTypesRef.current,
+      );
+    }
+    return merged;
+  }
+
   function handleNodeSelection(nodeId: string) {
     try {
       (async () => {
@@ -411,10 +447,54 @@ function App() {
             setSessionsOpen(true);
           }
         }
+
+        // Bloom-style click-to-expand: merge the 1-hop subgraph in, focus the
+        // node, and record the traversal breadcrumb.
+        const node = details.node as AkgNode | undefined;
+        if (node) {
+          const sub = await akgClient.getSubgraph(nodeId, 1);
+          mergeGraph(sub);
+          if (rendererRef.current && layoutRef.current) {
+            rendererRef.current.setVisualMode("focus", {
+              highlightIds: sub.nodes.map((n) => n.id),
+            });
+            layoutRef.current.applyFocusLayout(nodeId);
+            rendererRef.current.flyToNode(nodeId, layoutRef.current.getNodes());
+          }
+          setBreadcrumbs((prev) => {
+            const next = prev.filter((c) => c.id !== nodeId);
+            next.push({ id: nodeId, label: node.label, type: node.type });
+            return next.slice(-8);
+          });
+          // decision/adr node → prefetch the "Why" provenance bundle
+          if (node.type === "adr" || node.id.startsWith("decision::")) {
+            setProvenanceLoading(true);
+            try {
+              setProvenance(await akgClient.getDecisionProvenance(nodeId));
+            } catch (err) {
+              console.error("Failed to fetch decision provenance:", err);
+              setProvenance(null);
+            } finally {
+              setProvenanceLoading(false);
+            }
+          } else {
+            setProvenance(null);
+            setProvenanceTab("inspector");
+          }
+        }
       })();
     } catch (err) {
       console.error("Failed to fetch node details:", err);
     }
+  }
+
+  /** Clicking a breadcrumb re-focuses that node; trailing crumbs are dropped. */
+  function handleBreadcrumbJump(index: number) {
+    const crumb = breadcrumbs[index];
+    if (!crumb || !layoutRef.current || !rendererRef.current) return;
+    setBreadcrumbs((prev) => prev.slice(0, index + 1));
+    rendererRef.current?.setSelection(crumb.id);
+    rendererRef.current.flyToNode(crumb.id, layoutRef.current.getNodes());
   }
 
   const handleSearchChange = async (val: string) => {
@@ -705,7 +785,30 @@ function App() {
   const inspectorPanel = (
     <aside className={`atlas-drawer right ${inspectorOpen ? "open" : ""}`}>
       <div className="drawer-head">
-        <span className="drawer-title">Inspector</span>
+        {selectedNode && (selectedNode.type === "adr" || selectedNode.id.startsWith("decision::")) ? (
+          <div className="drawer-tabs" role="tablist" aria-label="Inspect decision">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={provenanceTab === "inspector"}
+              className={`drawer-tab ${provenanceTab === "inspector" ? "active" : ""}`}
+              onClick={() => setProvenanceTab("inspector")}
+            >
+              Inspector
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={provenanceTab === "why"}
+              className={`drawer-tab ${provenanceTab === "why" ? "active" : ""}`}
+              onClick={() => setProvenanceTab("why")}
+            >
+              Why
+            </button>
+          </div>
+        ) : (
+          <span className="drawer-title">Inspector</span>
+        )}
         <button
           className="icon-btn"
           onClick={() => {
@@ -718,7 +821,15 @@ function App() {
         </button>
       </div>
       <div className="drawer-body">
-        {selectedNode ? (
+        {provenanceTab === "why" &&
+        selectedNode &&
+        (selectedNode.type === "adr" || selectedNode.id.startsWith("decision::")) ? (
+          <ProvenancePanel
+            provenance={provenance}
+            loading={provenanceLoading}
+            onNavigate={(id) => handleNodeSelectionRef.current(id)}
+          />
+        ) : selectedNode ? (
           <>
             <div className="inspector-header">
               <span className="inspector-type">{selectedNode.type}</span>
@@ -887,6 +998,38 @@ function App() {
           </button>
         </div>
       </header>
+
+      {breadcrumbs.length > 0 && (
+        <nav className="atlas-breadcrumbs" aria-label="Exploration path">
+          {breadcrumbs.map((crumb, i) => (
+            <span key={crumb.id} className="breadcrumb-item">
+              {i > 0 && <span className="breadcrumb-sep">›</span>}
+              <button
+                type="button"
+                className={`breadcrumb-crumb ${i === breadcrumbs.length - 1 ? "current" : ""}`}
+                onClick={() => handleBreadcrumbJump(i)}
+                title={`${crumb.type} · ${crumb.id}`}
+              >
+                {crumb.label}
+              </button>
+            </span>
+          ))}
+          <button
+            type="button"
+            className="breadcrumb-clear"
+            onClick={() => {
+              setBreadcrumbs([]);
+              rendererRef.current?.setSelection(null);
+              setVisualMode("explore");
+              if (layoutRef.current) layoutRef.current.applyDefaultLayout();
+              if (rendererRef.current) rendererRef.current.setVisualMode("explore");
+            }}
+            title="Clear exploration path (Esc)"
+          >
+            <X size={11} />
+          </button>
+        </nav>
+      )}
 
       <main className="atlas-canvas-container" ref={canvasRef}>
         {initError && (

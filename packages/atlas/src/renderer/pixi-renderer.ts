@@ -1,20 +1,24 @@
 import * as PIXI from "pixi.js";
 import type { LayoutEdge, LayoutNode } from "../layout/force-layout";
-import { PIXI_THEME, getNodeTheme } from "./theme";
+import { bakeShapeTextures } from "./shapes";
+import { type NodeShape, PIXI_THEME, getEdgeSemantics, getLodMinZoom, getNodeTheme } from "./theme";
 
 /**
  * Atlas PixiJS 8 renderer — "Obsidian" style.
  *
  * Efficiency design (10k-50k nodes):
- *  - Nodes are Sprite instances sharing ONE white circle texture, tinted per
- *    type/state → Pixi batches them into a single draw call. No per-frame
- *    Graphics triangulation (the old per-node Graphics.redraw() path).
+ *  - Nodes are Sprite instances sharing ONE of six pre-baked white shape
+ *    textures (circle/rounded-square/hexagon/diamond/page/donut), tinted per
+ *    type/state → Pixi batches per texture (≤6 draw calls). No per-frame
+ *    Graphics triangulation.
  *  - Halo is one pre-baked additive radial-gradient texture, reused via tint+alpha.
  *  - Labels are pre-rendered sprite textures (generateTexture), capped at
- *    PIXI_THEME.label.budget, ranked by importance; never one PIXI.Text per node.
+ *    PIXI_THEME.label.budget, ranked by priority; never one PIXI.Text per node.
  *  - Hover picking via a uniform-grid spatial hash rebuilt alongside positions;
  *    selection ring is a single overlay Graphics, not 50k event listeners.
  *  - Edges live in one Graphics; redrawn only while animating or on mode change.
+ *  - Story edges (decided/affects/implements/...) are rare, so they get the
+ *    visual budget: tapered quads + arrowhead on emphasis, semantic color.
  */
 
 interface SpatialCell {
@@ -35,8 +39,12 @@ export class PixiRenderer {
   private haloSprite!: PIXI.Sprite;
 
   // Shared textures (white, tinted per node/state)
-  private dotTexture!: PIXI.Texture;
   private haloTexture!: PIXI.Texture;
+  private shapeTextures!: Record<NodeShape, PIXI.Texture>;
+
+  // Spawn-at-parent reveal: node id → spawn start timestamp (ms). Nodes added
+  // after the initial load grow scale 0→1 from their new position.
+  private spawnTimes: Map<string, number> = new Map();
 
   // Label layer
   private labelContainer!: PIXI.Container;
@@ -100,8 +108,8 @@ export class PixiRenderer {
     this.app.stage.addChild(this.viewport);
 
     // Shared textures
-    this.dotTexture = this.bakeDotTexture();
     this.haloTexture = this.bakeHaloTexture();
+    this.shapeTextures = bakeShapeTextures(this.app);
 
     // Layer order: edges → nodes → halos → ring → labels
     this.edgesGraphics = new PIXI.Graphics();
@@ -123,13 +131,6 @@ export class PixiRenderer {
     this.viewport.addChild(this.labelContainer);
 
     this.setupViewportEvents();
-  }
-
-  /** Bake a small white antialiased circle texture once. */
-  private bakeDotTexture(): PIXI.Texture {
-    const size = 64;
-    const g = new PIXI.Graphics().circle(size / 2, size / 2, size / 2 - 1).fill({ color: 0xffffff, alpha: 1 });
-    return this.app.renderer.generateTexture({ target: g, resolution: 2 });
   }
 
   /** Bake a soft radial-gradient halo (white; tinted via sprite.tint). */
@@ -311,26 +312,35 @@ export class PixiRenderer {
       sprite.destroy();
     }
     this.nodeSprites.clear();
+    const prevIds = new Set(this.nodeData.keys());
     this.nodeData.clear();
     this.nodesArray = nodes;
     this.labelSprites.forEach((s) => s.destroy());
     this.labelSprites.clear();
     this.labelTextureCache.forEach((t) => t.destroy());
     this.labelTextureCache.clear();
+    const now = performance.now();
 
-    // Create a sprite per node (shared texture, tinted by type)
+    // Create a sprite per node (shape texture, tinted by type)
     for (const n of nodes) {
       if (!visibleTypes.has(n.type)) continue;
       const theme = getNodeTheme(n.type);
-      const sprite = new PIXI.Sprite(this.dotTexture);
+      const texture = this.shapeTextures[theme.shape];
+      const sprite = new PIXI.Sprite(texture);
       sprite.anchor.set(0.5);
       sprite.tint = theme.dim;
       sprite.alpha = PIXI_THEME.nodeAlpha.rest;
       sprite.position.set(n.x || 0, n.y || 0);
-      sprite.scale.set((theme.radius * 2) / this.dotTexture.width, (theme.radius * 2) / this.dotTexture.height);
+      sprite.scale.set((theme.radius * 2) / texture.width, (theme.radius * 2) / texture.height);
       this.viewport.addChild(sprite);
       this.nodeSprites.set(n.id, sprite);
       this.nodeData.set(n.id, { x: n.x || 0, y: n.y || 0, radius: theme.radius });
+
+      // Newly merged nodes spawn at their position, scale 0→1 (grow-in reveal).
+      if (!prevIds.has(n.id)) {
+        this.spawnTimes.set(n.id, now);
+        sprite.scale.set(0, 0);
+      }
     }
 
     this.rebuildSpatial();
@@ -341,12 +351,53 @@ export class PixiRenderer {
     this.applyNodeState();
   }
 
+  /** Draw a tapered story edge as a filled quad (1px → ~2px) toward the target. */
+  private drawStoryEdge(x1: number, y1: number, x2: number, y2: number, colorVal: number, alphaVal: number): void {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const px = -dy / len;
+    const py = dx / len;
+    const w1 = 0.7;
+    const w2 = 2.1;
+    this.edgesGraphics
+      .moveTo(x1 + px * w1, y1 + py * w1)
+      .lineTo(x2 + px * w2, y2 + py * w2)
+      .lineTo(x2 - px * w2, y2 - py * w2)
+      .lineTo(x1 - px * w1, y1 - py * w1)
+      .closePath()
+      .fill({ color: colorVal, alpha: alphaVal });
+  }
+
   drawEdges(nodes: LayoutNode[], edges: LayoutEdge[], visibleTypes: Set<string>): void {
     this.edgesGraphics.clear();
     const nodeMap = new Map<string, LayoutNode>();
     for (const n of nodes) nodeMap.set(n.id, n);
 
     const theme = PIXI_THEME.edge;
+
+    // Selection emphasis (explore mode): compute 1-hop and 2-hop neighbor sets
+    // of the selected node so edges get semantic emphasis by proximity.
+    let selHop1: Set<string> | null = null;
+    let selHop2: Set<string> | null = null;
+    if (this.selectedNodeId && this.activeMode === "explore") {
+      const adj = new Map<string, Set<string>>();
+      for (const e of edges) {
+        const srcId = typeof e.source === "string" ? e.source : (e.source as LayoutNode).id;
+        const tgtId = typeof e.target === "string" ? e.target : (e.target as LayoutNode).id;
+        if (!adj.has(srcId)) adj.set(srcId, new Set());
+        if (!adj.has(tgtId)) adj.set(tgtId, new Set());
+        adj.get(srcId)!.add(tgtId);
+        adj.get(tgtId)!.add(srcId);
+      }
+      selHop1 = adj.get(this.selectedNodeId) || new Set();
+      selHop2 = new Set();
+      for (const nid of selHop1) {
+        for (const n2 of adj.get(nid) || []) {
+          if (n2 !== this.selectedNodeId && !selHop1.has(n2)) selHop2.add(n2);
+        }
+      }
+    }
 
     for (const e of edges) {
       const srcId = typeof e.source === "string" ? e.source : (e.source as LayoutNode).id;
@@ -361,9 +412,27 @@ export class PixiRenderer {
       const x2 = tgtNode.x || 0;
       const y2 = tgtNode.y || 0;
 
-      let colorVal: number = theme.rest;
-      let alphaVal: number = theme.restAlpha;
-      let widthVal: number = theme.width;
+      const semantics = getEdgeSemantics(e.relation);
+      let colorVal: number = semantics.color;
+      let alphaVal: number = semantics.restAlpha;
+      let widthVal: number = semantics.width;
+
+      // Selection proximity emphasis (explore mode): the selected node's 1-hop
+      // story edges pop to full semantic color; 2-hop at half; rest ghost.
+      if (selHop1 && this.activeMode === "explore") {
+        const sIn = srcId === this.selectedNodeId || selHop1.has(srcId);
+        const tIn = tgtId === this.selectedNodeId || selHop1.has(tgtId);
+        const s2 = selHop2!.has(srcId);
+        const t2 = selHop2!.has(tgtId);
+        if (sIn && tIn) {
+          alphaVal = semantics.family === "story" ? 0.75 : 0.45;
+          widthVal = Math.max(widthVal, semantics.family === "story" ? 2 : 1.5);
+        } else if ((sIn && t2) || (tIn && s2)) {
+          alphaVal = semantics.family === "story" ? 0.4 : 0.2;
+        } else {
+          alphaVal = 0.05;
+        }
+      }
 
       const inPath = this.activeMode === "path";
       const isPathEdge = inPath && this.pathNodeIds.includes(srcId) && this.pathNodeIds.includes(tgtId);
@@ -408,12 +477,35 @@ export class PixiRenderer {
         }
       }
 
-      // Weight scales resting alpha
-      if (this.activeMode === "explore" && e.weight) {
-        alphaVal = Math.min(theme.weightMaxAlpha, theme.restAlpha + e.weight * 0.2);
+      // Weight scales resting alpha (explore only, no selection)
+      if (this.activeMode === "explore" && !selHop1 && e.weight) {
+        alphaVal = Math.min(theme.weightMaxAlpha, semantics.restAlpha + e.weight * 0.2);
       }
 
-      if (isPathEdge && this.activeMode === "path") {
+      // Story edges render as tapered quads (direction = flow). Path mode keeps
+      // its curved highlight.
+      const isStory = semantics.family === "story";
+      const emphasized = alphaVal > semantics.restAlpha + 0.05;
+
+      if (isStory && !isPathEdge && (this.activeMode !== "topo" || !this.topoCycleIds.has(srcId))) {
+        this.drawStoryEdge(x1, y1, x2, y2, colorVal, alphaVal);
+        if (emphasized) {
+          // small arrowhead at the target for emphasized story edges
+          const dx = x2 - x1;
+          const dy = y2 - y1;
+          const len = Math.hypot(dx, dy) || 1;
+          const ux = dx / len;
+          const uy = dy / len;
+          const tipLen = 6;
+          const wing = 3.5;
+          this.edgesGraphics
+            .moveTo(x2, y2)
+            .lineTo(x2 - ux * tipLen + -uy * wing, y2 - uy * tipLen + ux * wing)
+            .lineTo(x2 - ux * tipLen + uy * wing, y2 - uy * tipLen - ux * wing)
+            .closePath()
+            .fill({ color: colorVal, alpha: alphaVal });
+        }
+      } else if (isPathEdge && this.activeMode === "path") {
         // slight curve for the highlighted path edge
         const midX = (x1 + x2) / 2;
         const midY = (y1 + y2) / 2 - Math.abs(x2 - x1) * 0.15;
@@ -444,6 +536,7 @@ export class PixiRenderer {
     const maxWx = (this.containerWidth - vpX + margin) / zoom;
     const minWy = (-vpY - margin) / zoom;
     const maxWy = (this.containerHeight - vpY + margin) / zoom;
+    const now = performance.now();
 
     for (const n of nodes) {
       const sprite = this.nodeSprites.get(n.id);
@@ -456,8 +549,24 @@ export class PixiRenderer {
       data.y = ny;
       sprite.position.set(nx, ny);
 
+      // LOD tier: hide detail types (functions, agent messages) when zoomed out
       const onScreen = nx >= minWx && nx <= maxWx && ny >= minWy && ny <= maxWy;
-      sprite.visible = onScreen;
+      sprite.visible = onScreen && zoom >= getLodMinZoom(n.type);
+
+      // Spawn-at-parent reveal: scale 0→1 with ease-out-back over dur.expand
+      const spawnStart = this.spawnTimes.get(n.id);
+      if (spawnStart !== undefined) {
+        const t = (now - spawnStart) / PIXI_THEME.dur.expand;
+        if (t >= 1) {
+          this.spawnTimes.delete(n.id);
+        } else {
+          const e = 1 - (1 - t) ** 3;
+          const theme = getNodeTheme(n.type);
+          const base = (theme.radius * 2) / sprite.texture.width;
+          const s = base * e;
+          sprite.scale.set(s, s);
+        }
+      }
     }
 
     if (!settled || this.lastSettled !== settled) {
@@ -563,6 +672,7 @@ export class PixiRenderer {
 
     // Score visible nodes; always include hovered/selected
     const candidates: { node: LayoutNode; score: number }[] = [];
+    const priority = PIXI_THEME.label.typePriority as Record<string, number>;
     for (const n of this.nodesArray) {
       const sprite = this.nodeSprites.get(n.id);
       if (!sprite || !sprite.visible) continue;
@@ -570,9 +680,7 @@ export class PixiRenderer {
         candidates.push({ node: n, score: Number.POSITIVE_INFINITY });
         continue;
       }
-      let typeWeight = 1;
-      if (n.type === "file" || n.type === "workspace" || n.type === "class") typeWeight = 3;
-      else if (n.type === "adr") typeWeight = 2;
+      const typeWeight = priority[n.type] ?? 1;
       if (band === 1 && typeWeight < 3) continue;
       const degree = (n as any).degree || 0;
       const data = this.nodeData.get(n.id);
