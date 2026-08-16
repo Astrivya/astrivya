@@ -151,6 +151,7 @@ export class ForceLayout {
           .force("cluster", this.forceCommunityCentroid())
           .force("group", this.forceGroupCentroid())
           .force("chain", this.forceChainStraighten())
+          .force("orbit", this.forceRepoOrbit())
           .alpha(0.35)
           .restart();
       }
@@ -419,6 +420,46 @@ export class ForceLayout {
     }
     force.initialize = (_: LayoutNode[]) => {
       nodes = _;
+    };
+    return force;
+  }
+
+  /**
+   * Repo-shell orbital anchoring: repo nodes settle onto a ring around the
+   * origin (workspace root) like planets — the overview reads as a solar
+   * system of repositories instead of a random cloud. Angular slots are
+   * alphabetical; repos that are pinned (focus/topo/path modes) are skipped.
+   */
+  private forceRepoOrbit() {
+    let nodes: LayoutNode[];
+    let targets: { node: LayoutNode; tx: number; ty: number }[] = [];
+    const SHELL_RADIUS = 340;
+
+    function force(alpha: number) {
+      for (const { node, tx, ty } of targets) {
+        if (node.fx !== null || node.fy !== null) continue;
+        node.vx! += (tx - (node.x || 0)) * 0.02 * alpha;
+        node.vy! += (ty - (node.y || 0)) * 0.02 * alpha;
+      }
+    }
+    force.initialize = (_: LayoutNode[]) => {
+      nodes = _;
+      targets = [];
+      const repos = nodes
+        .filter((n) => n.type === "repo")
+        .sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+      const count = Math.max(1, repos.length);
+      repos.forEach((repo, i) => {
+        const angle = (i / count) * Math.PI * 2;
+        targets.push({
+          node: repo,
+          tx: SHELL_RADIUS * Math.cos(angle),
+          ty: SHELL_RADIUS * Math.sin(angle),
+        });
+      });
+      for (const ws of nodes.filter((n) => n.type === "workspace")) {
+        targets.push({ node: ws, tx: 0, ty: 0 });
+      }
     };
     return force;
   }

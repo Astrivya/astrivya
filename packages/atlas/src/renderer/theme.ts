@@ -96,8 +96,9 @@ export const PIXI_THEME = {
     fill: 0xe6e6eb,
     /** zoom bands: below first = none; between = files/workspace/class only; above = all */
     lodZooms: [0.55, 0.85],
-    /** max labels rendered at once (top by priority), rest hidden */
-    budget: 40,
+    /** max labels rendered at once = budgetPerZoom * zoom (40 labels at 1.0×) */
+    budgetPerZoom: 40,
+    budgetMax: 160,
     /** type weight for label priority (higher = shown first) */
     typePriority: {
       decision: 5,
@@ -147,6 +148,11 @@ export const PIXI_THEME = {
   zoom: { min: 0.1, max: 3.5, fitPad: 140 },
 
   cullMargin: 120,
+
+  /** Explore mode: only the top `exploreSetCap` most-important nodes render
+   *  (containers + decision hubs + high-degree), keeping the overview clean
+   *  at thousands of nodes. Selection/hover always promoted into the set. */
+  exploreSetCap: 200,
 
   dur: { hover: 90, fly: 550, select: 220, dim: 300, modeFade: 260, expand: 180 },
 } as const;
