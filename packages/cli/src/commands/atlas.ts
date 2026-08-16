@@ -1,4 +1,4 @@
-import { exec, execSync, spawn } from "node:child_process";
+import { exec, execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -801,11 +801,25 @@ export function registerAtlas(program: Command): void {
 
               const commits: { hash: string; date: string; author: string; subject: string }[] = [];
               try {
-                const out = execSync(
-                  `git log --since="${new Date(since).toISOString()}" --until="${new Date(until).toISOString()}" --format=%H|%aI|%an|%s -n 20`,
+                // execFileSync (no shell): execSync's `%H`/`%aI` format
+                // specifiers get mangled by Windows cmd as batch variables,
+                // so the windowed log silently produced nothing on Windows.
+                const out = execFileSync(
+                  "git",
+                  [
+                    "log",
+                    "--since",
+                    new Date(since).toISOString(),
+                    "--until",
+                    new Date(until).toISOString(),
+                    "--format=%H|%aI|%an|%s",
+                    "-n",
+                    "20",
+                  ],
                   { cwd: workspacePath, encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] },
                 );
                 for (const line of out.split("\n")) {
+                  if (commits.length >= 8) break;
                   const [hash, date, author, ...rest] = line.split("|");
                   if (!hash) continue;
                   commits.push({ hash: hash.slice(0, 7), date, author, subject: rest.join("|") });
@@ -813,6 +827,79 @@ export function registerAtlas(program: Command): void {
               } catch {
                 // git unavailable or no commits in the window — evidence
                 // gap, not an error
+              }
+              if (commits.length === 0 && node.label) {
+                // Keyword fallback: a decision logged without edges still has
+                // its label/content — match recent commit subjects against
+                // its significant words so "where this landed" shows up even
+                // when the ±14d window misses (e.g. pre-squash history).
+                const stop = new Set([
+                  "the",
+                  "and",
+                  "for",
+                  "with",
+                  "fix",
+                  "feat",
+                  "from",
+                  "into",
+                  "when",
+                  "this",
+                  "that",
+                  "make",
+                  "made",
+                  "use",
+                  "using",
+                  "add",
+                  "added",
+                  "update",
+                  "updated",
+                ]);
+                const keywords = `${node.label} ${node.content || ""}`
+                  .toLowerCase()
+                  .split(/[^a-z0-9]+/)
+                  .filter((w) => w.length >= 4 && !stop.has(w))
+                  .slice(0, 6);
+                if (keywords.length > 0) {
+                  try {
+                    const recent = execFileSync("git", ["log", "--format=%H|%aI|%an|%s", "-n", "60"], {
+                      cwd: workspacePath,
+                      encoding: "utf-8",
+                      timeout: 5000,
+                      stdio: ["ignore", "pipe", "ignore"],
+                    });
+                    const recentSubjects = recent
+                      .split("\n")
+                      .map((l) => l.split("|").slice(3).join("|").toLowerCase())
+                      .filter(Boolean);
+                    if (recentSubjects.length > 0) {
+                      // Drop keywords that hit more than half of the recent
+                      // log — they are too generic to be evidence (e.g. the
+                      // repo name "astrivya" matches every merge subject).
+                      const usable = keywords.filter((k) => {
+                        const hits = recentSubjects.filter((s) => s.includes(k)).length;
+                        return hits > 0 && hits / recentSubjects.length <= 0.5;
+                      });
+                      // Rank matched commits by how many distinct keywords
+                      // hit, then recency — strongest evidence first.
+                      const scored: { hash: string; date: string; author: string; subject: string; hits: number }[] =
+                        [];
+                      for (const line of recent.split("\n")) {
+                        if (scored.length >= 60) break;
+                        const [hash, date, author, ...rest] = line.split("|");
+                        if (!hash) continue;
+                        const subject = rest.join("|");
+                        const hits = usable.filter((k) => subject.toLowerCase().includes(k)).length;
+                        if (hits > 0) scored.push({ hash: hash.slice(0, 7), date, author, subject, hits });
+                      }
+                      scored.sort((a, b) => b.hits - a.hits);
+                      for (const c of scored.slice(0, 5)) {
+                        commits.push({ hash: c.hash, date: c.date, author: c.author, subject: c.subject });
+                      }
+                    }
+                  } catch {
+                    // git unavailable — evidence gap
+                  }
+                }
               }
 
               const relatedDecisions: { id: string; label: string; createdAt: number; relation: string }[] = [];

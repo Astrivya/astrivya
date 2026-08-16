@@ -51,6 +51,10 @@ export class PixiRenderer {
   private labelSprites: Map<string, PIXI.Sprite> = new Map();
   private labelTextureCache: Map<string, PIXI.Texture> = new Map();
 
+  // Explore-mode importance set: top N nodes (by priority × degree) that stay
+  // rendered at overview; everything else appears via LOD as you zoom in.
+  private exploreSet: Set<string> = new Set();
+
   // Spatial hash for hover picking
   private cellSize = 48;
   private spatial: Map<string, SpatialCell> = new Map();
@@ -280,6 +284,7 @@ export class PixiRenderer {
   setSelection(nodeId: string | null): void {
     this.selectedNodeId = nodeId;
     this.updateRing();
+    this.computeExploreSet();
     this.requestLabelRefresh();
   }
 
@@ -304,6 +309,7 @@ export class PixiRenderer {
 
     this.needsEdgeRedraw = true;
     this.applyNodeState();
+    this.computeExploreSet();
   }
 
   updateGraph(nodes: LayoutNode[], edges: LayoutEdge[], visibleTypes: Set<string>): void {
@@ -349,6 +355,28 @@ export class PixiRenderer {
     this.lastSettled = false;
     this.lastLabelBand = -1;
     this.applyNodeState();
+    this.computeExploreSet();
+  }
+
+  /** Rank nodes by importance (type priority × degree) and keep only the top
+   *  `exploreSetCap` rendered in explore mode. Selection/hover always win. */
+  private computeExploreSet(): void {
+    const priority = PIXI_THEME.label.typePriority as Record<string, number>;
+    const ranked = this.nodesArray
+      .map((n) => {
+        const typeWeight = priority[n.type] ?? 1;
+        const degree = (n as { degree?: number }).degree || 0;
+        const importance = typeWeight * (1 + degree / 10);
+        return { id: n.id, importance };
+      })
+      .sort((a, b) => b.importance - a.importance);
+
+    const set = new Set<string>();
+    const cap = PIXI_THEME.exploreSetCap;
+    for (let i = 0; i < Math.min(cap, ranked.length); i++) set.add(ranked[i].id);
+    if (this.selectedNodeId) set.add(this.selectedNodeId);
+    if (this.hoveredNodeId) set.add(this.hoveredNodeId);
+    this.exploreSet = set;
   }
 
   /** Draw a tapered story edge as a filled quad (1px → ~2px) toward the target. */
@@ -549,9 +577,15 @@ export class PixiRenderer {
       data.y = ny;
       sprite.position.set(nx, ny);
 
-      // LOD tier: hide detail types (functions, agent messages) when zoomed out
+      // LOD tier: hide detail types (functions, agent messages) when zoomed out.
+      // Explore mode additionally caps to the importance set so the overview
+      // stays clean at thousands of nodes.
       const onScreen = nx >= minWx && nx <= maxWx && ny >= minWy && ny <= maxWy;
-      sprite.visible = onScreen && zoom >= getLodMinZoom(n.type);
+      const inExploreSet =
+        this.activeMode === "explore"
+          ? this.exploreSet.has(n.id) || n.id === this.hoveredNodeId || n.id === this.selectedNodeId
+          : true;
+      sprite.visible = onScreen && zoom >= getLodMinZoom(n.type) && inExploreSet;
 
       // Spawn-at-parent reveal: scale 0→1 with ease-out-back over dur.expand
       const spawnStart = this.spawnTimes.get(n.id);
@@ -690,7 +724,7 @@ export class PixiRenderer {
     }
 
     candidates.sort((a, b) => b.score - a.score);
-    const budget = PIXI_THEME.label.budget;
+    const budget = Math.min(PIXI_THEME.label.budgetMax, Math.round(PIXI_THEME.label.budgetPerZoom * this.zoom));
     for (let i = 0; i < Math.min(budget, candidates.length); i++) {
       const { node } = candidates[i];
       this.addLabelSprite(node);
