@@ -634,13 +634,29 @@ export function registerAtlas(program: Command): void {
             }
 
             if (pathname === "/api/akg/communities") {
-              const rows = storage.runQuery("SELECT DISTINCT community FROM nodes WHERE community IS NOT NULL;");
-              const comms = rows.map((r) => {
-                const commId = r.community;
-                const label = getCommunityLabel(storage, commId);
-                const count = storage.runQuery("SELECT COUNT(*) as cnt FROM nodes WHERE community = ?;", [commId])[0]
-                  .cnt;
-                return { id: commId, label, nodeCount: count };
+              const rows = storage.runQuery(
+                "SELECT community, type, COUNT(*) as cnt FROM nodes WHERE community IS NOT NULL GROUP BY community, type;",
+              );
+              const byComm = new Map<number, { histogram: Map<string, number>; count: number }>();
+              for (const r of rows || []) {
+                const id = r.community as number;
+                let c = byComm.get(id);
+                if (!c) {
+                  c = { histogram: new Map(), count: 0 };
+                  byComm.set(id, c);
+                }
+                c.histogram.set(r.type, (c.histogram.get(r.type) || 0) + r.cnt);
+                c.count += r.cnt;
+              }
+              const comms = [...byComm.entries()].map(([id, c]) => {
+                const sorted = [...c.histogram.entries()].sort((a, b) => b[1] - a[1]);
+                return {
+                  id,
+                  label: getCommunityLabel(storage, id),
+                  nodeCount: c.count,
+                  typeHistogram: Object.fromEntries(c.histogram),
+                  dominantType: sorted[0]?.[0] ?? "default",
+                };
               });
               res.writeHead(200);
               res.end(JSON.stringify(comms));

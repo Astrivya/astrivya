@@ -68,6 +68,16 @@ export interface AkgStats {
   dbSize: number;
 }
 
+/** Community aggregate for the supernode overview: count + type mix so the
+ *  renderer can size and tint each supernode by its dominant type. */
+export interface CommunityInfo {
+  id: number;
+  label: string;
+  nodeCount: number;
+  typeHistogram: Record<string, number>;
+  dominantType: string;
+}
+
 export interface TopoSortEntry {
   node: AkgNode;
   depth: number;
@@ -205,6 +215,11 @@ export const akgClient = {
 
   async getStats(): Promise<AkgStats> {
     const res = await apiFetch("/stats");
+    return res.json();
+  },
+
+  async getCommunities(): Promise<CommunityInfo[]> {
+    const res = await apiFetch("/communities");
     return res.json();
   },
 

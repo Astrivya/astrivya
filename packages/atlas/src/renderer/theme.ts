@@ -154,6 +154,22 @@ export const PIXI_THEME = {
    *  at thousands of nodes. Selection/hover always promoted into the set. */
   exploreSetCap: 200,
 
+  /** Overview (rung 0) supernode aggregation — the "beautiful at 20" view.
+   *  Communities render as one disc at the member centroid; cross-community
+   *  edges collapse to thin bundles between disc centers. */
+  supernode: {
+    /** base radius for a 1-node community; radius = min(maxR, base * sqrt(count)) */
+    baseR: 7,
+    maxR: 64,
+    /** only the largest `labelCap` communities get labels */
+    labelCap: 30,
+    alpha: 0.92,
+    hoverAlpha: 1,
+    bundleAlpha: 0.05,
+    bundleWidth: 1,
+    haloScale: 3.2,
+  },
+
   dur: { hover: 90, fly: 550, select: 220, dim: 300, modeFade: 260, expand: 180 },
 } as const;
 
